@@ -608,7 +608,49 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
     if (m_drawing && (event->buttons() & Qt::LeftButton)) {
         drawStrokeTo(point, m_tool == StampTool);
         update();
+        return;
     }
+    if (m_tool == EditPlane && !m_dragging)
+        updateHoverCursor(point);
+}
+
+void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
+{
+    if (m_selectedPlane < 0 || m_selectedPlane >= m_planes.size()) {
+        setCursor(Qt::ArrowCursor);
+        return;
+    }
+
+    const Plane &plane = m_planes[m_selectedPlane];
+    const int handle = handleAt(plane, imagePoint);
+    if (handle >= 4) {
+        const int edge = handle - 4;
+        const QPointF edgeMidpoint = (plane.corner[edge] +
+                                      plane.corner[(edge + 1) % 4]) / 2.0;
+        const QPointF oppositeMidpoint = (plane.corner[(edge + 2) % 4] +
+                                          plane.corner[(edge + 3) % 4]) / 2.0;
+        const QPointF axis = edgeMidpoint - oppositeMidpoint;
+        const qreal ax = qAbs(axis.x());
+        const qreal ay = qAbs(axis.y());
+
+        if (ax < ay * 0.42)
+            setCursor(Qt::SizeVerCursor);
+        else if (ay < ax * 0.42)
+            setCursor(Qt::SizeHorCursor);
+        else if (axis.x() * axis.y() >= 0.0)
+            setCursor(Qt::SizeFDiagCursor);
+        else
+            setCursor(Qt::SizeBDiagCursor);
+        return;
+    }
+    if (handle >= 0) {
+        setCursor(Qt::CrossCursor);
+        return;
+    }
+    if (planePolygon(plane.corner).containsPoint(imagePoint, Qt::OddEvenFill))
+        setCursor(Qt::SizeAllCursor);
+    else
+        setCursor(Qt::ArrowCursor);
 }
 
 void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
@@ -634,6 +676,8 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
     m_dragHandle = m_dragEdge = -1;
     if (m_stateChanged)
         commitHistory();
+    if (m_tool == EditPlane)
+        updateHoverCursor(toImage(event->position()));
     update();
 }
 

@@ -76,6 +76,7 @@ private:
     void drawPlaneGuides(QPainter &painter, const Plane &plane, bool selected) const;
     void applyDab(Plane &plane, const QPointF &uv, bool stamp);
     void drawStrokeTo(const QPointF &imagePoint, bool stamp);
+    void updateHoverCursor(const QPointF &imagePoint);
     Plane makePerpendicularPlane(const Plane &source, int edge, const QPointF &dragPoint) const;
     Plane resizePlaneAlongEdge(const Plane &source, int edge, const QPointF &dragPoint) const;
     bool perpendicularDirection(const Plane &source, const QPointF &atPoint,
