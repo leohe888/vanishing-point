@@ -71,6 +71,9 @@ private:
     void applyDab(Plane &plane, const QPointF &uv, bool stamp);
     void drawStrokeTo(const QPointF &imagePoint, bool stamp);
     Plane makePerpendicularPlane(const Plane &source, int edge, const QPointF &dragPoint) const;
+    Plane resizePlaneAlongEdge(const Plane &source, int edge, const QPointF &dragPoint) const;
+    bool perpendicularDirection(const Plane &source, const QPointF &atPoint,
+                                QPointF *direction) const;
     static bool isValidPlane(const Plane &plane);
     CanvasState captureState() const;
     void restoreState(const CanvasState &state);

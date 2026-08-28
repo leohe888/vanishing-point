@@ -7,6 +7,7 @@
 #include <QPolygonF>
 #include <QResizeEvent>
 #include <QTransform>
+#include <QVector3D>
 #include <QtMath>
 
 namespace {
@@ -166,7 +167,7 @@ void PerspectiveCanvas::setTool(Tool tool)
     setCursor(tool == EditPlane ? Qt::SizeAllCursor : Qt::CrossCursor);
     const QString messages[] = {
         tr("依次单击四个角点以创建平面"),
-        tr("拖动控制点或平面；按住 Ctrl 从边缘拖出垂直平面"),
+        tr("拖动控制点或平面；按住 Ctrl 从边缘拖出垂直于当前平面的平面"),
         tr("Alt+单击设置仿制源，然后拖动进行仿制"),
         tr("在平面内拖动进行透视绘画")
     };
@@ -518,7 +519,8 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
     if (m_tool == EditPlane && m_dragging && m_selectedPlane >= 0) {
         Plane &plane = m_planes[m_selectedPlane];
         if (m_extruding) {
-            m_extrudePreview = makePerpendicularPlane(m_dragStartPlane, m_dragEdge, point);
+            m_extrudePreview = makePerpendicularPlane(m_dragStartPlane, m_dragEdge,
+                                                       point);
             m_hasExtrudePreview = isValidPlane(m_extrudePreview);
         } else if (m_dragHandle >= 0 && m_dragHandle < 4) {
             Plane candidate = m_dragStartPlane;
@@ -530,16 +532,7 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
             }
         } else if (m_dragHandle >= 4) {
             const int edge = m_dragHandle - 4;
-            const QPointF a = m_dragStartPlane.corner[edge];
-            const QPointF b = m_dragStartPlane.corner[(edge + 1) % 4];
-            QPointF normal(-(b - a).y(), (b - a).x());
-            const qreal length = qSqrt(QPointF::dotProduct(normal, normal));
-            if (length > Epsilon)
-                normal /= length;
-            const QPointF delta = normal * QPointF::dotProduct(point - m_pressImagePoint, normal);
-            Plane candidate = m_dragStartPlane;
-            candidate.corner[edge] = a + delta;
-            candidate.corner[(edge + 1) % 4] = b + delta;
+            const Plane candidate = resizePlaneAlongEdge(m_dragStartPlane, edge, point);
             if (isValidPlane(candidate))
             {
                 plane = candidate;
@@ -587,24 +580,220 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
     update();
 }
 
+PerspectiveCanvas::Plane PerspectiveCanvas::resizePlaneAlongEdge(const Plane &source, int edge,
+                                                                  const QPointF &dragPoint) const
+{
+    Plane result = source;
+    const int next = (edge + 1) % 4;
+    const int oppositeNext = (edge + 2) % 4;
+    const int previous = (edge + 3) % 4;
+    const QPointF a = source.corner[edge];
+    const QPointF b = source.corner[next];
+    const QPointF oppositeA = source.corner[oppositeNext];
+    const QPointF oppositeB = source.corner[previous];
+    const QPointF edgeMidpoint = (a + b) / 2.0;
+    const QPointF oppositeMidpoint = (oppositeA + oppositeB) / 2.0;
+
+    // An edge resize has one degree of freedom. Ignore sideways pointer motion
+    // and retain only movement along the plane's existing extension axis.
+    QPointF extensionAxis = edgeMidpoint - oppositeMidpoint;
+    qreal axisLength = QLineF(QPointF(), extensionAxis).length();
+    if (axisLength < Epsilon) {
+        extensionAxis = QPointF(-(b - a).y(), (b - a).x());
+        axisLength = QLineF(QPointF(), extensionAxis).length();
+    }
+    if (axisLength < Epsilon)
+        return result;
+    extensionAxis /= axisLength;
+    const qreal extension = QPointF::dotProduct(dragPoint - m_pressImagePoint, extensionAxis);
+    const QPointF targetPoint = edgeMidpoint + extensionAxis * extension;
+
+    // The resized edge must retain the original edge-direction vanishing point.
+    QPointF edgeVanishingPoint;
+    const auto vpType = QLineF(a, b).intersects(QLineF(oppositeA, oppositeB),
+                                                &edgeVanishingPoint);
+    QLineF resizedEdge;
+    if (vpType != QLineF::NoIntersection && qIsFinite(edgeVanishingPoint.x()) &&
+        qIsFinite(edgeVanishingPoint.y()) &&
+        QLineF(edgeVanishingPoint, targetPoint).length() > 1.0 &&
+        QLineF(edgeVanishingPoint, edgeMidpoint).length() < 1e7) {
+        resizedEdge = QLineF(edgeVanishingPoint, targetPoint);
+    } else {
+        // Parallel edges are the limiting case with a vanishing point at infinity.
+        resizedEdge = QLineF(targetPoint, targetPoint + (b - a));
+    }
+
+    // Each endpoint is constrained to its existing side line. This is what
+    // keeps a vertical plane vertical while only changing its height.
+    QPointF movedA;
+    QPointF movedB;
+    const auto aType = QLineF(a, source.corner[previous]).intersects(resizedEdge, &movedA);
+    const auto bType = QLineF(b, source.corner[oppositeNext]).intersects(resizedEdge, &movedB);
+    if (aType == QLineF::NoIntersection || bType == QLineF::NoIntersection ||
+        !qIsFinite(movedA.x()) || !qIsFinite(movedA.y()) ||
+        !qIsFinite(movedB.x()) || !qIsFinite(movedB.y()))
+        return result;
+
+    result.corner[edge] = movedA;
+    result.corner[next] = movedB;
+    return result;
+}
+
+bool PerspectiveCanvas::perpendicularDirection(const Plane &source, const QPointF &atPoint,
+                                                QPointF *direction) const
+{
+    // Recover the two vanishing points of the source plane in homogeneous
+    // image coordinates. Homogeneous form also covers parallel line families.
+    auto imagePoint = [](const QPointF &p) {
+        return QVector3D(float(p.x()), float(p.y()), 1.0f);
+    };
+    const QVector3D p0 = imagePoint(source.corner[0]);
+    const QVector3D p1 = imagePoint(source.corner[1]);
+    const QVector3D p2 = imagePoint(source.corner[2]);
+    const QVector3D p3 = imagePoint(source.corner[3]);
+    const QVector3D line01 = QVector3D::crossProduct(p0, p1);
+    const QVector3D line32 = QVector3D::crossProduct(p3, p2);
+    const QVector3D line03 = QVector3D::crossProduct(p0, p3);
+    const QVector3D line12 = QVector3D::crossProduct(p1, p2);
+    const QVector3D vanishingX = QVector3D::crossProduct(line01, line32);
+    const QVector3D vanishingY = QVector3D::crossProduct(line03, line12);
+    if (vanishingX.lengthSquared() < 1e-12f || vanishingY.lengthSquared() < 1e-12f)
+        return false;
+
+    const qreal cx = m_background.width() / 2.0;
+    const qreal cy = m_background.height() / 2.0;
+    const qreal imageExtent = qMax(m_background.width(), m_background.height());
+    qreal focalLength = imageExtent * 1.2;
+
+    // When both vanishing points are finite and the two grid axes represent
+    // orthogonal world directions, their orthogonality determines focal length.
+    if (qAbs(vanishingX.z()) > 1e-6 && qAbs(vanishingY.z()) > 1e-6) {
+        const QPointF vx(vanishingX.x() / vanishingX.z(),
+                         vanishingX.y() / vanishingX.z());
+        const QPointF vy(vanishingY.x() / vanishingY.z(),
+                         vanishingY.y() / vanishingY.z());
+        const qreal inferredFocalSquared =
+            -QPointF::dotProduct(vx - QPointF(cx, cy), vy - QPointF(cx, cy));
+        const qreal minimumFocal = imageExtent * 0.08;
+        const qreal maximumFocal = imageExtent * 20.0;
+        if (inferredFocalSquared > minimumFocal * minimumFocal &&
+            inferredFocalSquared < maximumFocal * maximumFocal)
+            focalLength = qSqrt(inferredFocalSquared);
+    }
+
+    auto cameraDirection = [cx, cy, focalLength](const QVector3D &v) {
+        return QVector3D(float(v.x() - cx * v.z()),
+                         float(v.y() - cy * v.z()),
+                         float(focalLength * v.z())).normalized();
+    };
+    const QVector3D directionX = cameraDirection(vanishingX);
+    const QVector3D directionY = cameraDirection(vanishingY);
+    QVector3D normal = QVector3D::crossProduct(directionX, directionY);
+    if (normal.lengthSquared() < 1e-10f)
+        return false;
+    normal.normalize();
+
+    // Project the 3D normal through K. This is the third vanishing point shared
+    // by every plane perpendicular to the source plane.
+    const qreal projectedX = focalLength * normal.x() + cx * normal.z();
+    const qreal projectedY = focalLength * normal.y() + cy * normal.z();
+    QPointF projectedDirection;
+    if (qAbs(normal.z()) > 1e-6) {
+        const QPointF perpendicularVanishingPoint(projectedX / normal.z(),
+                                                  projectedY / normal.z());
+        projectedDirection = perpendicularVanishingPoint - atPoint;
+    } else {
+        // A zero homogeneous w means the third vanishing point is at infinity.
+        projectedDirection = QPointF(projectedX, projectedY);
+    }
+
+    const qreal length = QLineF(QPointF(), projectedDirection).length();
+    if (!qIsFinite(length) || length < Epsilon)
+        return false;
+    *direction = projectedDirection / length;
+    return true;
+}
+
 PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &source, int edge,
                                                                     const QPointF &dragPoint) const
 {
     Plane result;
     const QPointF a = source.corner[edge];
     const QPointF b = source.corner[(edge + 1) % 4];
-    QPointF normal(-(b - a).y(), (b - a).x());
-    const qreal length = qSqrt(QPointF::dotProduct(normal, normal));
-    if (length > Epsilon)
-        normal /= length;
-    if (QPointF::dotProduct(dragPoint - (a + b) / 2.0, normal) < 0)
-        normal = -normal;
-    const qreal depth = qMax(2.0, qAbs(QPointF::dotProduct(dragPoint - (a + b) / 2.0, normal)));
-    const QPointF delta = normal * depth;
+    const QPointF midpoint = (a + b) / 2.0;
+    QPointF perpendicularAtMidpoint;
+    if (!perpendicularDirection(source, midpoint, &perpendicularAtMidpoint))
+        return result;
+
+    // The pointer controls only the signed distance along the projected 3D
+    // normal. Sideways motion cannot alter the perpendicular plane's angle.
+    const qreal amount = QPointF::dotProduct(dragPoint - m_pressImagePoint,
+                                             perpendicularAtMidpoint);
+    const QPointF targetMidpoint = midpoint + perpendicularAtMidpoint * amount;
     result.corner[0] = a;
     result.corner[1] = b;
-    result.corner[2] = b + delta;
-    result.corner[3] = a + delta;
+
+    if (qAbs(amount) < 2.0) {
+        result.corner[2] = b;
+        result.corner[3] = a;
+        return result;
+    }
+
+    // The shared edge and the new outer edge represent the same direction in
+    // 3D, so both meet at the original edge family's vanishing point.
+    const QPointF oppositeA = source.corner[(edge + 2) % 4];
+    const QPointF oppositeB = source.corner[(edge + 3) % 4];
+    QPointF edgeVanishingPoint;
+    const QLineF::IntersectionType vpType =
+        QLineF(a, b).intersects(QLineF(oppositeA, oppositeB), &edgeVanishingPoint);
+
+    bool constructedWithVanishingPoint = false;
+    if (vpType != QLineF::NoIntersection && qIsFinite(edgeVanishingPoint.x()) &&
+        qIsFinite(edgeVanishingPoint.y()) &&
+        QLineF(edgeVanishingPoint, (a + b) / 2.0).length() < 1e7) {
+        if (QLineF(edgeVanishingPoint, targetMidpoint).length() > 1.0) {
+            QPointF outerAtB;
+            QPointF outerAtA;
+            const QLineF outerLine(edgeVanishingPoint, targetMidpoint);
+            QPointF perpendicularAtA;
+            QPointF perpendicularAtB;
+            if (!perpendicularDirection(source, a, &perpendicularAtA) ||
+                !perpendicularDirection(source, b, &perpendicularAtB))
+                return result;
+            const auto bType = QLineF(b, b + perpendicularAtB).intersects(outerLine, &outerAtB);
+            const auto aType = QLineF(a, a + perpendicularAtA).intersects(outerLine, &outerAtA);
+            if (bType != QLineF::NoIntersection && aType != QLineF::NoIntersection &&
+                qIsFinite(outerAtA.x()) && qIsFinite(outerAtA.y()) &&
+                qIsFinite(outerAtB.x()) && qIsFinite(outerAtB.y())) {
+                result.corner[2] = outerAtB;
+                result.corner[3] = outerAtA;
+                constructedWithVanishingPoint = true;
+            }
+        }
+    }
+
+    // Parallel source edges have their vanishing point at infinity, so the
+    // outer edge remains parallel while its endpoints still follow the third
+    // (perpendicular) vanishing direction.
+    if (!constructedWithVanishingPoint) {
+        const QLineF outerLine(targetMidpoint, targetMidpoint + (b - a));
+        QPointF perpendicularAtA;
+        QPointF perpendicularAtB;
+        QPointF outerAtA;
+        QPointF outerAtB;
+        if (perpendicularDirection(source, a, &perpendicularAtA) &&
+            perpendicularDirection(source, b, &perpendicularAtB) &&
+            QLineF(a, a + perpendicularAtA).intersects(outerLine, &outerAtA) !=
+                QLineF::NoIntersection &&
+            QLineF(b, b + perpendicularAtB).intersects(outerLine, &outerAtB) !=
+                QLineF::NoIntersection) {
+            result.corner[2] = outerAtB;
+            result.corner[3] = outerAtA;
+        } else {
+            result.corner[2] = b;
+            result.corner[3] = a;
+        }
+    }
     return result;
 }
 
