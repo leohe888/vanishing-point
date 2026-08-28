@@ -11,6 +11,7 @@
 
 namespace {
 constexpr int TextureSize = 1024;
+constexpr int MaxHistoryStates = 40;
 constexpr qreal Epsilon = 1e-6;
 
 QPolygonF planePolygon(const QPointF corner[4])
@@ -55,6 +56,7 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
     p.drawText(m_background.rect(), Qt::AlignCenter,
                tr("打开一张图像，或直接在此画布上创建透视平面"));
     updateViewTransform();
+    resetHistory();
 }
 
 bool PerspectiveCanvas::loadImage(const QString &fileName)
@@ -67,6 +69,7 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
     m_creationPoints.clear();
     m_selectedPlane = -1;
     m_hasCloneSource = false;
+    resetHistory();
     updateViewTransform();
     update();
     emit statusMessage(tr("图像已打开。请依次点击四个点创建透视平面。"), 5000);
@@ -85,10 +88,74 @@ bool PerspectiveCanvas::saveResult(const QString &fileName) const
 
 void PerspectiveCanvas::clearPainting()
 {
+    if (m_planes.isEmpty())
+        return;
     for (Plane &plane : m_planes)
         plane.paint.fill(Qt::transparent);
+    commitHistory();
     update();
     emit statusMessage(tr("已清除所有平面上的绘画内容"), 3000);
+}
+
+PerspectiveCanvas::CanvasState PerspectiveCanvas::captureState() const
+{
+    return CanvasState{m_planes, m_selectedPlane};
+}
+
+void PerspectiveCanvas::restoreState(const CanvasState &state)
+{
+    m_planes = state.planes;
+    m_selectedPlane = state.selectedPlane;
+    m_creationPoints.clear();
+    m_dragging = m_drawing = m_extruding = false;
+    m_hasExtrudePreview = false;
+    m_stateChanged = false;
+    update();
+}
+
+void PerspectiveCanvas::resetHistory()
+{
+    m_history.clear();
+    m_history.append(captureState());
+    m_historyIndex = 0;
+    m_stateChanged = false;
+    emit canUndoChanged(false);
+    emit canRedoChanged(false);
+}
+
+void PerspectiveCanvas::commitHistory()
+{
+    while (m_history.size() > m_historyIndex + 1)
+        m_history.removeLast();
+    m_history.append(captureState());
+    ++m_historyIndex;
+    if (m_history.size() > MaxHistoryStates) {
+        m_history.removeFirst();
+        --m_historyIndex;
+    }
+    m_stateChanged = false;
+    emit canUndoChanged(m_historyIndex > 0);
+    emit canRedoChanged(false);
+}
+
+void PerspectiveCanvas::undo()
+{
+    if (m_historyIndex <= 0)
+        return;
+    restoreState(m_history[--m_historyIndex]);
+    emit canUndoChanged(m_historyIndex > 0);
+    emit canRedoChanged(true);
+    emit statusMessage(tr("已撤销"), 1800);
+}
+
+void PerspectiveCanvas::redo()
+{
+    if (m_historyIndex + 1 >= m_history.size())
+        return;
+    restoreState(m_history[++m_historyIndex]);
+    emit canUndoChanged(true);
+    emit canRedoChanged(m_historyIndex + 1 < m_history.size());
+    emit statusMessage(tr("已重做"), 1800);
 }
 
 void PerspectiveCanvas::setTool(Tool tool)
@@ -363,7 +430,9 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             if (isValidPlane(plane)) {
                 m_planes.append(plane);
                 m_selectedPlane = m_planes.size() - 1;
-                emit statusMessage(tr("平面已创建。可切换到编辑、图章或画笔工具。"), 4000);
+                commitHistory();
+                emit statusMessage(tr("平面已创建，已自动进入编辑工具。"), 4000);
+                emit toolChangeRequested(EditPlane);
             } else {
                 emit statusMessage(tr("无法创建：四个点必须依次组成非交叉的凸四边形，请重新设置。"), 5000);
             }
@@ -439,6 +508,7 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
         m_cloneStrokeStarted = true;
     }
     applyDab(m_planes[planeIndex], uv, m_tool == StampTool);
+    m_stateChanged = true;
     update();
 }
 
@@ -454,7 +524,10 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
             Plane candidate = m_dragStartPlane;
             candidate.corner[m_dragHandle] = point;
             if (isValidPlane(candidate))
+            {
                 plane = candidate;
+                m_stateChanged = true;
+            }
         } else if (m_dragHandle >= 4) {
             const int edge = m_dragHandle - 4;
             const QPointF a = m_dragStartPlane.corner[edge];
@@ -468,11 +541,15 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
             candidate.corner[edge] = a + delta;
             candidate.corner[(edge + 1) % 4] = b + delta;
             if (isValidPlane(candidate))
+            {
                 plane = candidate;
+                m_stateChanged = true;
+            }
         } else {
             const QPointF delta = point - m_pressImagePoint;
             for (int i = 0; i < 4; ++i)
                 plane.corner[i] = m_dragStartPlane.corner[i] + delta;
+            m_stateChanged = !delta.isNull();
         }
         m_lastImagePoint = point;
         update();
@@ -497,6 +574,7 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
             m_extrudePreview.name = tr("平面 %1").arg(m_planes.size() + 1);
             m_planes.append(m_extrudePreview);
             m_selectedPlane = m_planes.size() - 1;
+            m_stateChanged = true;
             emit statusMessage(tr("已创建相邻的垂直平面"), 3000);
         }
     }
@@ -504,6 +582,8 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
     m_hasExtrudePreview = false;
     m_cloneStrokeStarted = false;
     m_dragHandle = m_dragEdge = -1;
+    if (m_stateChanged)
+        commitHistory();
     update();
 }
 
@@ -606,6 +686,7 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
     } else if (event->key() == Qt::Key_Delete && m_tool == EditPlane && m_selectedPlane >= 0) {
         m_planes.removeAt(m_selectedPlane);
         m_selectedPlane = qMin(m_selectedPlane, m_planes.size() - 1);
+        commitHistory();
         update();
     } else {
         QWidget::keyPressEvent(event);

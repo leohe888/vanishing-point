@@ -35,6 +35,16 @@ void MainWindow::buildUi()
     auto *openAction = fileBar->addAction(tr("打开图像"));
     auto *saveAction = fileBar->addAction(tr("导出结果"));
     fileBar->addSeparator();
+    auto *undoAction = fileBar->addAction(tr("撤销"));
+    auto *redoAction = fileBar->addAction(tr("重做"));
+    undoAction->setEnabled(false);
+    redoAction->setEnabled(false);
+    undoAction->setShortcuts(QKeySequence::keyBindings(QKeySequence::Undo));
+    QList<QKeySequence> redoShortcuts = QKeySequence::keyBindings(QKeySequence::Redo);
+    if (!redoShortcuts.contains(QKeySequence("Ctrl+Shift+Z")))
+        redoShortcuts.append(QKeySequence("Ctrl+Shift+Z"));
+    redoAction->setShortcuts(redoShortcuts);
+    fileBar->addSeparator();
     auto *clearPaintAction = fileBar->addAction(tr("清除绘画"));
 
     auto *root = new QWidget(this);
@@ -141,6 +151,11 @@ void MainWindow::buildUi()
 
     connect(m_tools, &QButtonGroup::idClicked, m_canvas,
             [this](int id) { m_canvas->setTool(static_cast<PerspectiveCanvas::Tool>(id)); });
+    connect(m_canvas, &PerspectiveCanvas::toolChangeRequested, this,
+            [this](PerspectiveCanvas::Tool tool) {
+                if (QAbstractButton *button = m_tools->button(static_cast<int>(tool)))
+                    button->click();
+            });
     const QList<QKeySequence> shortcuts{QKeySequence("C"), QKeySequence("V"),
                                         QKeySequence("S"), QKeySequence("B")};
     for (int i = 0; i < shortcuts.size(); ++i) {
@@ -164,6 +179,10 @@ void MainWindow::buildUi()
             QMessageBox::warning(this, tr("保存失败"), tr("无法写入目标文件。"));
     });
     connect(clearPaintAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::clearPainting);
+    connect(undoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::undo);
+    connect(redoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::redo);
+    connect(m_canvas, &PerspectiveCanvas::canUndoChanged, undoAction, &QAction::setEnabled);
+    connect(m_canvas, &PerspectiveCanvas::canRedoChanged, redoAction, &QAction::setEnabled);
     connect(m_canvas, &PerspectiveCanvas::statusMessage, statusBar(), &QStatusBar::showMessage);
     statusBar()->showMessage(tr("使用创建平面工具依次点击四个点"));
 }

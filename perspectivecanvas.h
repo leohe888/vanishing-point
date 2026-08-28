@@ -27,9 +27,14 @@ public slots:
     void setBrushOpacity(int value) { m_opacity = value / 100.0; }
     void setBrushColor(const QColor &color) { m_brushColor = color; }
     void clearPainting();
+    void undo();
+    void redo();
 
 signals:
     void statusMessage(const QString &text, int timeout = 0);
+    void toolChangeRequested(Tool tool);
+    void canUndoChanged(bool available);
+    void canRedoChanged(bool available);
 
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -44,6 +49,11 @@ private:
         QPointF corner[4];
         QImage paint;
         QString name;
+    };
+
+    struct CanvasState {
+        QVector<Plane> planes;
+        int selectedPlane = -1;
     };
 
     QPointF toImage(const QPointF &widgetPoint) const;
@@ -62,6 +72,10 @@ private:
     void drawStrokeTo(const QPointF &imagePoint, bool stamp);
     Plane makePerpendicularPlane(const Plane &source, int edge, const QPointF &dragPoint) const;
     static bool isValidPlane(const Plane &plane);
+    CanvasState captureState() const;
+    void restoreState(const CanvasState &state);
+    void resetHistory();
+    void commitHistory();
     static qreal distanceToSegment(const QPointF &p, const QPointF &a, const QPointF &b,
                                    qreal *t = nullptr);
 
@@ -92,4 +106,7 @@ private:
     qreal m_hardness = .75;
     qreal m_opacity = 1.0;
     QColor m_brushColor = QColor("#e85d4a");
+    QVector<CanvasState> m_history;
+    int m_historyIndex = -1;
+    bool m_stateChanged = false;
 };
