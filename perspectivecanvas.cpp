@@ -1,6 +1,10 @@
 #include "perspectivecanvas.h"
 
 #include <QKeyEvent>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QImageReader>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -8,6 +12,7 @@
 #include <QResizeEvent>
 #include <QTransform>
 #include <QVector3D>
+#include <QUrl>
 #include <QtMath>
 
 namespace {
@@ -39,6 +44,7 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
 {
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
+    setAcceptDrops(true);
     setMinimumSize(500, 400);
 
     m_background = QImage(1200, 800, QImage::Format_ARGB32);
@@ -85,6 +91,50 @@ bool PerspectiveCanvas::saveResult(const QString &fileName) const
     renderScene(painter, false);
     painter.end();
     return result.save(fileName);
+}
+
+bool PerspectiveCanvas::placeImage(const QString &fileName)
+{
+    if (!hasSelectedPlane()) {
+        emit statusMessage(tr("请先选中一个透视平面"), 3500);
+        return false;
+    }
+    QImage image(fileName);
+    if (image.isNull()) {
+        emit statusMessage(tr("无法读取要置入的图片"), 3500);
+        return false;
+    }
+    m_planes[m_selectedPlane].content = image.convertToFormat(QImage::Format_ARGB32);
+    commitHistory();
+    update();
+    emit statusMessage(tr("图片已按透视置入选中的平面"), 3500);
+    return true;
+}
+
+void PerspectiveCanvas::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (!hasSelectedPlane() || !event->mimeData()->hasUrls())
+        return;
+    for (const QUrl &url : event->mimeData()->urls()) {
+        if (url.isLocalFile() && !QImageReader::imageFormat(url.toLocalFile()).isEmpty()) {
+            event->acceptProposedAction();
+            return;
+        }
+    }
+}
+
+void PerspectiveCanvas::dropEvent(QDropEvent *event)
+{
+    if (!hasSelectedPlane()) {
+        emit statusMessage(tr("请先使用编辑工具选中一个透视平面"), 3500);
+        return;
+    }
+    for (const QUrl &url : event->mimeData()->urls()) {
+        if (url.isLocalFile() && placeImage(url.toLocalFile())) {
+            event->acceptProposedAction();
+            return;
+        }
+    }
 }
 
 void PerspectiveCanvas::clearPainting()
@@ -216,8 +266,10 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
 void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
 {
     painter.drawImage(QPointF(0, 0), m_background);
-    for (const Plane &plane : m_planes)
+    for (const Plane &plane : m_planes) {
+        renderProjectedImage(painter, plane, plane.content);
         renderProjectedImage(painter, plane, plane.paint);
+    }
 
     if (!showGuides)
         return;
@@ -855,6 +907,15 @@ void PerspectiveCanvas::applyDab(Plane &plane, const QPointF &uv, bool stamp)
                 const int ix = qBound(0, qRound(imagePoint.x()), m_background.width() - 1);
                 const int iy = qBound(0, qRound(imagePoint.y()), m_background.height() - 1);
                 source = QColor::fromRgba(m_background.pixel(ix, iy));
+                if (!sourcePlane.content.isNull()) {
+                    const int cx = qBound(0, qRound(sourceUv.x() *
+                                                   (sourcePlane.content.width() - 1)),
+                                          sourcePlane.content.width() - 1);
+                    const int cy = qBound(0, qRound(sourceUv.y() *
+                                                   (sourcePlane.content.height() - 1)),
+                                          sourcePlane.content.height() - 1);
+                    source = over(source, QColor::fromRgba(sourcePlane.content.pixel(cx, cy)));
+                }
                 const int tx = qBound(0, qRound(sourceUv.x() * (TextureSize - 1)), TextureSize - 1);
                 const int ty = qBound(0, qRound(sourceUv.y() * (TextureSize - 1)), TextureSize - 1);
                 source = over(source, QColor::fromRgba(sourcePlane.paint.pixel(tx, ty)));

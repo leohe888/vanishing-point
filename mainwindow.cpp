@@ -33,6 +33,7 @@ void MainWindow::buildUi()
     auto *fileBar = addToolBar(tr("文件"));
     fileBar->setMovable(false);
     auto *openAction = fileBar->addAction(tr("打开图像"));
+    auto *placeAction = fileBar->addAction(tr("置入图片"));
     auto *saveAction = fileBar->addAction(tr("导出结果"));
     fileBar->addSeparator();
     auto *undoAction = fileBar->addAction(tr("撤销"));
@@ -120,7 +121,7 @@ void MainWindow::buildUi()
     colorLayout->addWidget(colorButton);
     sideLayout->addWidget(m_colorRow);
 
-    auto *hint = new QLabel(tr("创建：依次点击四个角点\n编辑：拖动控制点；Ctrl+拖边创建垂直面\n图章：Alt+单击设置源点\n画笔/图章：拖动绘制"), side);
+    auto *hint = new QLabel(tr("创建：依次点击四个角点\n编辑：拖动控制点；Ctrl+拖出垂直于当前平面的平面\n图章：Alt+单击设置源点\n画笔/图章：拖动绘制"), side);
     hint->setWordWrap(true);
     hint->setObjectName("hint");
     sideLayout->addStretch();
@@ -175,6 +176,16 @@ void MainWindow::buildUi()
             tr("图像 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*)"));
         if (!file.isEmpty() && !m_canvas->loadImage(file))
             QMessageBox::warning(this, tr("打开失败"), tr("无法读取该图像。"));
+    });
+    connect(placeAction, &QAction::triggered, this, [this] {
+        if (!m_canvas->hasSelectedPlane()) {
+            QMessageBox::information(this, tr("置入图片"), tr("请先使用编辑工具选中一个透视平面。"));
+            return;
+        }
+        const QString file = QFileDialog::getOpenFileName(this, tr("选择要置入的图片"), {},
+            tr("图像 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*)"));
+        if (!file.isEmpty() && !m_canvas->placeImage(file))
+            QMessageBox::warning(this, tr("置入失败"), tr("无法读取该图片。"));
     });
     connect(saveAction, &QAction::triggered, this, [this] {
         const QString file = QFileDialog::getSaveFileName(this, tr("导出结果"), "vanishing-point.png",

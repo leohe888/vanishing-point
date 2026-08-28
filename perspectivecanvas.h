@@ -18,6 +18,8 @@ public:
     explicit PerspectiveCanvas(QWidget *parent = nullptr);
     bool loadImage(const QString &fileName);
     bool saveResult(const QString &fileName) const;
+    bool placeImage(const QString &fileName);
+    bool hasSelectedPlane() const { return m_selectedPlane >= 0 && m_selectedPlane < m_planes.size(); }
     QColor brushColor() const { return m_brushColor; }
 
 public slots:
@@ -43,10 +45,13 @@ protected:
     void mouseMoveEvent(QMouseEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
     void keyPressEvent(QKeyEvent *) override;
+    void dragEnterEvent(QDragEnterEvent *) override;
+    void dropEvent(QDropEvent *) override;
 
 private:
     struct Plane {
         QPointF corner[4];
+        QImage content;
         QImage paint;
         QString name;
     };
