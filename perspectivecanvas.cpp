@@ -56,12 +56,6 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
                 p.fillRect(x, y, 40, 40, QColor("#2d3035"));
         }
     }
-    p.setPen(QColor("#69717b"));
-    QFont f = p.font();
-    f.setPointSize(20);
-    p.setFont(f);
-    p.drawText(m_background.rect(), Qt::AlignCenter,
-               tr("打开一张图像，或直接在此画布上创建透视平面"));
     updateViewTransform();
     resetHistory();
 }
@@ -72,6 +66,7 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
     if (image.isNull())
         return false;
     m_background = image.convertToFormat(QImage::Format_ARGB32);
+    m_hasLoadedImage = true;
     m_planes.clear();
     m_creationPoints.clear();
     m_selectedPlane = -1;
@@ -266,6 +261,16 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
 void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
 {
     painter.drawImage(QPointF(0, 0), m_background);
+    if (showGuides && !m_hasLoadedImage && m_planes.isEmpty() && m_creationPoints.isEmpty()) {
+        painter.save();
+        painter.setPen(QColor("#89919b"));
+        QFont placeholderFont = painter.font();
+        placeholderFont.setPointSize(20);
+        painter.setFont(placeholderFont);
+        painter.drawText(m_background.rect(), Qt::AlignCenter,
+                         tr("打开一张图像，或直接在此画布上创建透视平面"));
+        painter.restore();
+    }
     for (const Plane &plane : m_planes) {
         renderProjectedImage(painter, plane, plane.content);
         renderProjectedImage(painter, plane, plane.paint);

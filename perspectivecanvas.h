@@ -88,6 +88,7 @@ private:
                                    qreal *t = nullptr);
 
     QImage m_background;
+    bool m_hasLoadedImage = false;
     QVector<Plane> m_planes;
     QVector<QPointF> m_creationPoints;
     Tool m_tool = CreatePlane;
