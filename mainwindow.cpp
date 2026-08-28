@@ -77,7 +77,8 @@ void MainWindow::buildUi()
     }
     m_tools->button(0)->setChecked(true);
 
-    auto addSlider = [side, sideLayout](const QString &name, int minimum, int maximum, int value) {
+    auto addSlider = [side, sideLayout](const QString &name, int minimum, int maximum,
+                                        int value, QWidget **rowOutput) {
         auto *row = new QWidget(side);
         auto *layout = new QHBoxLayout(row);
         layout->setContentsMargins(0, 7, 0, 0);
@@ -92,31 +93,32 @@ void MainWindow::buildUi()
         slider->setRange(minimum, maximum);
         slider->setValue(value);
         sideLayout->addWidget(slider);
+        *rowOutput = row;
         QObject::connect(slider, &QSlider::valueChanged, number,
                          [number](int v) { number->setText(QString::number(v)); });
         return slider;
     };
 
     sideLayout->addSpacing(8);
-    auto *brushTitle = new QLabel(tr("笔刷设置"), side);
-    brushTitle->setObjectName("sectionTitle");
-    sideLayout->addWidget(brushTitle);
-    m_diameter = addSlider(tr("直径"), 2, 200, 42);
-    m_hardness = addSlider(tr("硬度"), 0, 100, 75);
-    m_opacity = addSlider(tr("不透明度"), 1, 100, 100);
+    m_brushTitle = new QLabel(tr("笔刷设置"), side);
+    m_brushTitle->setObjectName("sectionTitle");
+    sideLayout->addWidget(m_brushTitle);
+    m_diameter = addSlider(tr("直径"), 2, 200, 42, &m_diameterRow);
+    m_hardness = addSlider(tr("硬度"), 0, 100, 75, &m_hardnessRow);
+    m_opacity = addSlider(tr("不透明度"), 1, 100, 100, &m_opacityRow);
 
-    auto *colorRow = new QWidget(side);
-    auto *colorLayout = new QHBoxLayout(colorRow);
+    m_colorRow = new QWidget(side);
+    auto *colorLayout = new QHBoxLayout(m_colorRow);
     colorLayout->setContentsMargins(0, 8, 0, 0);
-    colorLayout->addWidget(new QLabel(tr("画笔颜色"), colorRow));
+    colorLayout->addWidget(new QLabel(tr("画笔颜色"), m_colorRow));
     colorLayout->addStretch();
-    m_colorSwatch = new QLabel(colorRow);
+    m_colorSwatch = new QLabel(m_colorRow);
     m_colorSwatch->setFixedSize(44, 26);
     m_colorSwatch->setStyleSheet("background:#e85d4a; border:1px solid #777; border-radius:3px;");
     colorLayout->addWidget(m_colorSwatch);
-    auto *colorButton = new QPushButton(tr("选择"), colorRow);
+    auto *colorButton = new QPushButton(tr("选择"), m_colorRow);
     colorLayout->addWidget(colorButton);
-    sideLayout->addWidget(colorRow);
+    sideLayout->addWidget(m_colorRow);
 
     auto *hint = new QLabel(tr("创建：依次点击四个角点\n编辑：拖动控制点；Ctrl+拖边创建垂直面\n图章：Alt+单击设置源点\n画笔/图章：拖动绘制"), side);
     hint->setWordWrap(true);
@@ -149,8 +151,10 @@ void MainWindow::buildUi()
         QSlider::handle:horizontal { width:14px; margin:-5px 0; background:#4aa3df; border-radius:7px; }
     )");
 
-    connect(m_tools, &QButtonGroup::idClicked, m_canvas,
-            [this](int id) { m_canvas->setTool(static_cast<PerspectiveCanvas::Tool>(id)); });
+    connect(m_tools, &QButtonGroup::idClicked, m_canvas, [this](int id) {
+        updateToolOptions(id);
+        m_canvas->setTool(static_cast<PerspectiveCanvas::Tool>(id));
+    });
     connect(m_canvas, &PerspectiveCanvas::toolChangeRequested, this,
             [this](PerspectiveCanvas::Tool tool) {
                 if (QAbstractButton *button = m_tools->button(static_cast<int>(tool)))
@@ -184,7 +188,24 @@ void MainWindow::buildUi()
     connect(m_canvas, &PerspectiveCanvas::canUndoChanged, undoAction, &QAction::setEnabled);
     connect(m_canvas, &PerspectiveCanvas::canRedoChanged, redoAction, &QAction::setEnabled);
     connect(m_canvas, &PerspectiveCanvas::statusMessage, statusBar(), &QStatusBar::showMessage);
+    updateToolOptions(PerspectiveCanvas::CreatePlane);
     statusBar()->showMessage(tr("使用创建平面工具依次点击四个点"));
+}
+
+void MainWindow::updateToolOptions(int toolId)
+{
+    const bool isPaintingTool = toolId == PerspectiveCanvas::StampTool ||
+                                toolId == PerspectiveCanvas::BrushTool;
+    const bool isBrushTool = toolId == PerspectiveCanvas::BrushTool;
+
+    m_brushTitle->setVisible(isPaintingTool);
+    m_diameterRow->setVisible(isPaintingTool);
+    m_diameter->setVisible(isPaintingTool);
+    m_hardnessRow->setVisible(isPaintingTool);
+    m_hardness->setVisible(isPaintingTool);
+    m_opacityRow->setVisible(isPaintingTool);
+    m_opacity->setVisible(isPaintingTool);
+    m_colorRow->setVisible(isBrushTool);
 }
 
 void MainWindow::chooseColor()
