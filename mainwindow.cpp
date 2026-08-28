@@ -121,6 +121,10 @@ void MainWindow::buildUi()
 
     setStyleSheet(R"(
         QMainWindow { background:#25282c; }
+        QStatusBar { background:#202328; color:#f2f5f7; border-top:1px solid #111315;
+                     min-height:25px; padding-left:6px; }
+        QStatusBar QLabel { color:#f2f5f7; background:transparent; }
+        QStatusBar::item { border:none; }
         #sidePanel { background:#30343a; border-right:1px solid #15171a; }
         #sectionTitle { color:#f1f3f5; font-size:15px; font-weight:600; }
         #hint { color:#aeb4bc; }
