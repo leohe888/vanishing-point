@@ -947,3 +947,24 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
         QWidget::keyPressEvent(event);
     }
 }
+
+bool PerspectiveCanvas::focusNextPrevChild(bool next)
+{
+    if (m_tool != EditPlane || m_planes.isEmpty())
+        return QWidget::focusNextPrevChild(next);
+
+    if (m_selectedPlane < 0) {
+        m_selectedPlane = next ? 0 : m_planes.size() - 1;
+    } else if (next) {
+        m_selectedPlane = (m_selectedPlane + 1) % m_planes.size();
+    } else {
+        m_selectedPlane = (m_selectedPlane - 1 + m_planes.size()) % m_planes.size();
+    }
+    update();
+    emit statusMessage(tr("已选择：%1（%2/%3）")
+                           .arg(m_planes[m_selectedPlane].name)
+                           .arg(m_selectedPlane + 1)
+                           .arg(m_planes.size()),
+                       2500);
+    return true;
+}
