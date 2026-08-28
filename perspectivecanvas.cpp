@@ -238,6 +238,55 @@ qreal PerspectiveCanvas::distanceToSegment(const QPointF &p, const QPointF &a,
     return QLineF(p, a + d * amount).length();
 }
 
+bool PerspectiveCanvas::isValidPlane(const Plane &plane)
+{
+    // A projective transform maps the unit square to a simple convex quad.
+    // Reject concave, self-intersecting and nearly singular configurations before
+    // they reach quadToQuad(), otherwise its pole can pass through the plane.
+    qreal windingSign = 0.0;
+    qreal twiceArea = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        const QPointF a = plane.corner[i];
+        const QPointF b = plane.corner[(i + 1) % 4];
+        const QPointF c = plane.corner[(i + 2) % 4];
+        if (QLineF(a, b).length() < 8.0)
+            return false;
+        const QPointF ab = b - a;
+        const QPointF bc = c - b;
+        const qreal cross = ab.x() * bc.y() - ab.y() * bc.x();
+        if (qAbs(cross) < 4.0)
+            return false;
+        const qreal sign = cross > 0.0 ? 1.0 : -1.0;
+        if (i == 0)
+            windingSign = sign;
+        else if (sign != windingSign)
+            return false;
+        twiceArea += a.x() * b.y() - b.x() * a.y();
+    }
+    if (qAbs(twiceArea) < 100.0)
+        return false;
+
+    const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
+    QTransform transform;
+    if (!QTransform::quadToQuad(unit, planePolygon(plane.corner), transform))
+        return false;
+
+    // The homogeneous denominator must keep one sign over the complete unit
+    // square. Since it is linear in u/v, checking all corners is sufficient.
+    qreal denominatorSign = 0.0;
+    for (const QPointF &uv : unit) {
+        const qreal w = transform.m13() * uv.x() + transform.m23() * uv.y() + transform.m33();
+        if (!qIsFinite(w) || qAbs(w) < 1e-5)
+            return false;
+        const qreal sign = w > 0.0 ? 1.0 : -1.0;
+        if (denominatorSign == 0.0)
+            denominatorSign = sign;
+        else if (sign != denominatorSign)
+            return false;
+    }
+    return true;
+}
+
 int PerspectiveCanvas::edgeAt(const Plane &plane, const QPointF &point) const
 {
     const qreal tolerance = 9.0 / m_scale;
@@ -266,6 +315,11 @@ void PerspectiveCanvas::drawPlaneGuides(QPainter &painter, const Plane &plane, b
     painter.setBrush(Qt::NoBrush);
     painter.drawPolygon(planePolygon(plane.corner));
 
+    painter.save();
+    QPainterPath planeClip;
+    planeClip.addPolygon(planePolygon(plane.corner));
+    planeClip.closeSubpath();
+    painter.setClipPath(planeClip, Qt::IntersectClip);
     painter.setPen(QPen(QColor(65, 182, 235, selected ? 145 : 80), 0.8 / m_scale));
     constexpr int divisions = 8;
     for (int i = 1; i < divisions; ++i) {
@@ -273,6 +327,7 @@ void PerspectiveCanvas::drawPlaneGuides(QPainter &painter, const Plane &plane, b
         painter.drawLine(uvToPlane(plane, QPointF(t, 0)), uvToPlane(plane, QPointF(t, 1)));
         painter.drawLine(uvToPlane(plane, QPointF(0, t)), uvToPlane(plane, QPointF(1, t)));
     }
+    painter.restore();
 
     if (selected && m_tool == EditPlane) {
         const QVector<QPointF> hs = handles(plane);
@@ -305,10 +360,14 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             plane.paint = QImage(TextureSize, TextureSize, QImage::Format_ARGB32);
             plane.paint.fill(Qt::transparent);
             plane.name = tr("平面 %1").arg(m_planes.size() + 1);
-            m_planes.append(plane);
-            m_selectedPlane = m_planes.size() - 1;
+            if (isValidPlane(plane)) {
+                m_planes.append(plane);
+                m_selectedPlane = m_planes.size() - 1;
+                emit statusMessage(tr("平面已创建。可切换到编辑、图章或画笔工具。"), 4000);
+            } else {
+                emit statusMessage(tr("无法创建：四个点必须依次组成非交叉的凸四边形，请重新设置。"), 5000);
+            }
             m_creationPoints.clear();
-            emit statusMessage(tr("平面已创建。可切换到编辑、图章或画笔工具。"), 4000);
         } else {
             emit statusMessage(tr("已设置 %1/4 个角点").arg(m_creationPoints.size()), 2000);
         }
@@ -390,9 +449,12 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
         Plane &plane = m_planes[m_selectedPlane];
         if (m_extruding) {
             m_extrudePreview = makePerpendicularPlane(m_dragStartPlane, m_dragEdge, point);
-            m_hasExtrudePreview = true;
+            m_hasExtrudePreview = isValidPlane(m_extrudePreview);
         } else if (m_dragHandle >= 0 && m_dragHandle < 4) {
-            plane.corner[m_dragHandle] = point;
+            Plane candidate = m_dragStartPlane;
+            candidate.corner[m_dragHandle] = point;
+            if (isValidPlane(candidate))
+                plane = candidate;
         } else if (m_dragHandle >= 4) {
             const int edge = m_dragHandle - 4;
             const QPointF a = m_dragStartPlane.corner[edge];
@@ -402,8 +464,11 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
             if (length > Epsilon)
                 normal /= length;
             const QPointF delta = normal * QPointF::dotProduct(point - m_pressImagePoint, normal);
-            plane.corner[edge] = a + delta;
-            plane.corner[(edge + 1) % 4] = b + delta;
+            Plane candidate = m_dragStartPlane;
+            candidate.corner[edge] = a + delta;
+            candidate.corner[(edge + 1) % 4] = b + delta;
+            if (isValidPlane(candidate))
+                plane = candidate;
         } else {
             const QPointF delta = point - m_pressImagePoint;
             for (int i = 0; i < 4; ++i)

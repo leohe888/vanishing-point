@@ -61,6 +61,7 @@ private:
     void applyDab(Plane &plane, const QPointF &uv, bool stamp);
     void drawStrokeTo(const QPointF &imagePoint, bool stamp);
     Plane makePerpendicularPlane(const Plane &source, int edge, const QPointF &dragPoint) const;
+    static bool isValidPlane(const Plane &plane);
     static qreal distanceToSegment(const QPointF &p, const QPointF &a, const QPointF &b,
                                    qreal *t = nullptr);
 
