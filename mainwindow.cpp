@@ -189,7 +189,7 @@ void MainWindow::buildUi()
     });
     connect(saveAction, &QAction::triggered, this, [this] {
         const QString file = QFileDialog::getSaveFileName(this, tr("导出结果"), "vanishing-point.png",
-                                                          tr("PNG 图像 (*.png);;JPEG 图像 (*.jpg)"));
+                                                          tr("PNG 图像（支持透明） (*.png)"));
         if (!file.isEmpty() && !m_canvas->saveResult(file))
             QMessageBox::warning(this, tr("保存失败"), tr("无法写入目标文件。"));
     });

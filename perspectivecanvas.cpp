@@ -260,7 +260,11 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
 
 void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
 {
-    painter.drawImage(QPointF(0, 0), m_background);
+    // The generated checker/dark background is only a canvas aid. Export it
+    // only when the user actually opened a background image; otherwise the
+    // already-transparent result image remains transparent outside content.
+    if (showGuides || m_hasLoadedImage)
+        painter.drawImage(QPointF(0, 0), m_background);
     if (showGuides && !m_hasLoadedImage && m_planes.isEmpty() && m_creationPoints.isEmpty()) {
         painter.save();
         painter.setPen(QColor("#89919b"));
