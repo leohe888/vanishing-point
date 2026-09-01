@@ -50,6 +50,8 @@ protected:
     void dropEvent(QDropEvent *) override;
 
 private:
+    // A plane stores its four image-space corners plus two independent layers:
+    // the placed image and the transparent paint/stamp layer.
     struct Plane {
         QPointF corner[4];
         QImage content;
@@ -57,11 +59,15 @@ private:
         QString name;
     };
 
+    // History snapshots intentionally use Qt's implicitly-shared QImage, so
+    // unchanged layers do not get copied until a later edit modifies them.
     struct CanvasState {
         QVector<Plane> planes;
         int selectedPlane = -1;
     };
 
+    // Convert between widget coordinates (after zoom/centering) and the
+    // original image coordinate system used by all plane geometry.
     QPointF toImage(const QPointF &widgetPoint) const;
     QPointF toWidget(const QPointF &imagePoint) const;
     void updateViewTransform();
@@ -69,16 +75,21 @@ private:
     int handleAt(const Plane &plane, const QPointF &imagePoint) const;
     int edgeAt(const Plane &plane, const QPointF &imagePoint) const;
     QVector<QPointF> handles(const Plane &plane) const;
+    // Plane operations use normalized UV coordinates. A homography maps the
+    // unit square to the user's four-point quadrilateral in both directions.
     QPointF planeToUv(const Plane &plane, const QPointF &point, bool *ok = nullptr) const;
     QPointF uvToPlane(const Plane &plane, const QPointF &uv) const;
     void renderScene(QPainter &painter, bool showGuides) const;
     void renderProjectedImage(QPainter &painter, const Plane &plane, const QImage &texture) const;
     void drawPlaneGuides(QPainter &painter, const Plane &plane, bool selected) const;
+    // Apply one brush dab in texture space; perspective is introduced later
+    // when this texture is projected back onto the plane.
     void applyDab(Plane &plane, const QPointF &uv, bool stamp);
     void drawStrokeTo(const QPointF &imagePoint, bool stamp);
     void updateHoverCursor(const QPointF &imagePoint);
     Plane makePerpendicularPlane(const Plane &source, int edge, const QPointF &dragPoint) const;
     Plane resizePlaneAlongEdge(const Plane &source, int edge, const QPointF &dragPoint) const;
+    // Recover the projected third vanishing direction for a plane normal.
     bool perpendicularDirection(const Plane &source, const QPointF &atPoint,
                                 QPointF *direction) const;
     static bool isValidPlane(const Plane &plane);
@@ -117,6 +128,8 @@ private:
     qreal m_hardness = .75;
     qreal m_opacity = 1.0;
     QColor m_brushColor = QColor("#e85d4a");
+    // m_historyIndex points at the currently visible snapshot. New edits after
+    // undo discard the old redo branch, matching standard editor behavior.
     QVector<CanvasState> m_history;
     int m_historyIndex = -1;
     bool m_stateChanged = false;

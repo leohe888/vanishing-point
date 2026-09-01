@@ -16,17 +16,24 @@
 #include <QtMath>
 
 namespace {
+// Texture resolution is fixed so drawing quality is independent of the source
+// image size and of the current canvas zoom level.
 constexpr int TextureSize = 1024;
+// Keep history bounded because a snapshot can contain several large textures.
 constexpr int MaxHistoryStates = 40;
 constexpr qreal Epsilon = 1e-6;
 
 QPolygonF planePolygon(const QPointF corner[4])
 {
+    // The corner order is preserved: callers must provide clockwise or
+    // counter-clockwise points, never a crossed polygon.
     return QPolygonF{corner[0], corner[1], corner[2], corner[3]};
 }
 
 QColor over(const QColor &bottom, const QColor &top)
 {
+    // QColor's composition helpers are convenient for QPainter, but this
+    // manual source-over operation is needed for per-pixel texture painting.
     const qreal a = top.alphaF();
     const qreal outA = a + bottom.alphaF() * (1.0 - a);
     if (outA < Epsilon)
@@ -80,6 +87,8 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
 
 bool PerspectiveCanvas::saveResult(const QString &fileName) const
 {
+    // Start with transparent pixels. renderScene() deliberately skips the
+    // editor-only placeholder/checker background when no real image was loaded.
     QImage result(m_background.size(), QImage::Format_ARGB32);
     result.fill(Qt::transparent);
     QPainter painter(&result);
@@ -275,6 +284,7 @@ void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
                          tr("打开一张图像，或直接在此画布上创建透视平面"));
         painter.restore();
     }
+    // Draw placed content first, then paint/stamp marks on top of it.
     for (const Plane &plane : m_planes) {
         renderProjectedImage(painter, plane, plane.content);
         renderProjectedImage(painter, plane, plane.paint);
@@ -306,6 +316,8 @@ void PerspectiveCanvas::renderProjectedImage(QPainter &painter, const Plane &pla
         return;
     const QPolygonF source{QPointF(0, 0), QPointF(texture.width(), 0),
                            QPointF(texture.width(), texture.height()), QPointF(0, texture.height())};
+    // quadToQuad() produces the homography that gives every texture pixel its
+    // correct perspective position on the four-point plane.
     QTransform projection;
     if (!QTransform::quadToQuad(source, planePolygon(plane.corner), projection))
         return;
@@ -925,6 +937,8 @@ void PerspectiveCanvas::drawStrokeTo(const QPointF &point, bool stamp)
 
 void PerspectiveCanvas::applyDab(Plane &plane, const QPointF &uv, bool stamp)
 {
+    // Brush size is converted from image pixels to the plane's normalized
+    // texture so a dab keeps a consistent apparent size under perspective.
     const qreal planeWidth = (QLineF(plane.corner[0], plane.corner[1]).length() +
                               QLineF(plane.corner[3], plane.corner[2]).length()) / 2.0;
     const qreal radius = qBound(1.0, m_diameter * TextureSize /

@@ -27,6 +27,8 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::buildUi()
 {
+    // The main window owns only the controls. All geometry, rendering and
+    // interaction state live in PerspectiveCanvas.
     setWindowTitle(tr("消失点 / Vanishing Point"));
     resize(1280, 820);
 
@@ -78,6 +80,8 @@ void MainWindow::buildUi()
     }
     m_tools->button(0)->setChecked(true);
 
+    // Keep the numeric label and slider together so tool-specific visibility
+    // can hide an entire option row without leaving orphaned controls.
     auto addSlider = [side, sideLayout](const QString &name, int minimum, int maximum,
                                         int value, QWidget **rowOutput) {
         auto *row = new QWidget(side);
@@ -152,6 +156,7 @@ void MainWindow::buildUi()
         QSlider::handle:horizontal { width:14px; margin:-5px 0; background:#4aa3df; border-radius:7px; }
     )");
 
+    // Tool buttons update both the canvas mode and the visible parameter set.
     connect(m_tools, &QButtonGroup::idClicked, m_canvas, [this](int id) {
         updateToolOptions(id);
         m_canvas->setTool(static_cast<PerspectiveCanvas::Tool>(id));
@@ -205,6 +210,8 @@ void MainWindow::buildUi()
 
 void MainWindow::updateToolOptions(int toolId)
 {
+    // Stamp uses brush geometry but samples color from the source image; only
+    // the paint tool needs a user-selectable foreground color.
     const bool isPaintingTool = toolId == PerspectiveCanvas::StampTool ||
                                 toolId == PerspectiveCanvas::BrushTool;
     const bool isBrushTool = toolId == PerspectiveCanvas::BrushTool;
