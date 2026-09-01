@@ -97,24 +97,6 @@ bool PerspectiveCanvas::saveResult(const QString &fileName) const
     return result.save(fileName);
 }
 
-bool PerspectiveCanvas::placeImage(const QString &fileName)
-{
-    if (!hasSelectedPlane()) {
-        emit statusMessage(tr("请先选中一个透视平面"), 3500);
-        return false;
-    }
-    QImage image(fileName);
-    if (image.isNull()) {
-        emit statusMessage(tr("无法读取要置入的图片"), 3500);
-        return false;
-    }
-    m_planes[m_selectedPlane].content = image.convertToFormat(QImage::Format_ARGB32);
-    commitHistory();
-    update();
-    emit statusMessage(tr("图片已按透视置入选中的平面"), 3500);
-    return true;
-}
-
 void PerspectiveCanvas::dragEnterEvent(QDragEnterEvent *event)
 {
     // A dropped image has two meanings: before a document exists it becomes
@@ -382,10 +364,9 @@ void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
                          tr("请打开一张图片开始操作"));
         painter.restore();
     }
-    // Draw plane content first. The clipboard image remains a top-level,
-    // directly movable layer until a later operation explicitly consumes it.
+    // Draw each plane's paint layer first. The clipboard image remains a
+    // top-level, directly movable layer until it is explicitly removed.
     for (const Plane &plane : m_planes) {
-        renderProjectedImage(painter, plane, plane.content);
         renderProjectedImage(painter, plane, plane.paint);
     }
     renderPastedImage(painter);
@@ -1321,15 +1302,6 @@ void PerspectiveCanvas::applyDab(Plane &plane, const QPointF &uv, bool stamp)
                 const int ix = qBound(0, qRound(imagePoint.x()), m_background.width() - 1);
                 const int iy = qBound(0, qRound(imagePoint.y()), m_background.height() - 1);
                 source = QColor::fromRgba(m_background.pixel(ix, iy));
-                if (!sourcePlane.content.isNull()) {
-                    const int cx = qBound(0, qRound(sourceUv.x() *
-                                                   (sourcePlane.content.width() - 1)),
-                                          sourcePlane.content.width() - 1);
-                    const int cy = qBound(0, qRound(sourceUv.y() *
-                                                   (sourcePlane.content.height() - 1)),
-                                          sourcePlane.content.height() - 1);
-                    source = over(source, QColor::fromRgba(sourcePlane.content.pixel(cx, cy)));
-                }
                 const int tx = qBound(0, qRound(sourceUv.x() * (TextureSize - 1)), TextureSize - 1);
                 const int ty = qBound(0, qRound(sourceUv.y() * (TextureSize - 1)), TextureSize - 1);
                 source = over(source, QColor::fromRgba(sourcePlane.paint.pixel(tx, ty)));

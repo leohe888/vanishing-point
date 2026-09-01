@@ -18,7 +18,6 @@ public:
     explicit PerspectiveCanvas(QWidget *parent = nullptr);
     bool loadImage(const QString &fileName);
     bool saveResult(const QString &fileName) const;
-    bool placeImage(const QString &fileName);
     bool hasSelectedPlane() const { return m_selectedPlane >= 0 && m_selectedPlane < m_planes.size(); }
     bool hasLoadedImage() const { return m_hasLoadedImage; }
     QColor brushColor() const { return m_brushColor; }
@@ -56,8 +55,8 @@ protected:
     void dropEvent(QDropEvent *) override;
 
 private:
-    // A plane stores its four image-space corners plus two independent layers:
-    // the placed image and the transparent paint/stamp layer.
+    // A plane stores its canvas and unfolded-surface geometry plus one
+    // transparent texture used by the brush and clone-stamp tools.
     struct Plane {
         QPointF corner[4];
         // Adjacent planes share an unfolded 2D surface.  These coordinates
@@ -65,7 +64,6 @@ private:
         // own canvas homography.
         QPointF surfaceCorner[4];
         int surfaceGroup = -1;
-        QImage content;
         QImage paint;
         QString name;
     };
