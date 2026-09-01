@@ -74,6 +74,9 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
     m_planes.clear();
     m_pastedImage = QImage();
     m_pastedImagePosition = QPointF();
+    m_pastedImageAttached = false;
+    m_pastedSurfaceGroup = -1;
+    m_pastedHostPlane = -1;
     m_creationPoints.clear();
     m_selectedPlane = -1;
     m_hasCloneSource = false;
@@ -114,7 +117,10 @@ bool PerspectiveCanvas::placeImage(const QString &fileName)
 
 void PerspectiveCanvas::dragEnterEvent(QDragEnterEvent *event)
 {
-    if (!hasSelectedPlane() || !event->mimeData()->hasUrls())
+    // A dropped image has two meanings: before a document exists it becomes
+    // the background image; afterwards it becomes the movable floating image.
+    // Accept only local image files so arbitrary URLs are not swallowed.
+    if (!event->mimeData()->hasUrls())
         return;
     for (const QUrl &url : event->mimeData()->urls()) {
         if (url.isLocalFile() && !QImageReader::imageFormat(url.toLocalFile()).isEmpty()) {
@@ -126,15 +132,35 @@ void PerspectiveCanvas::dragEnterEvent(QDragEnterEvent *event)
 
 void PerspectiveCanvas::dropEvent(QDropEvent *event)
 {
-    if (!hasSelectedPlane()) {
-        emit statusMessage(tr("请先使用编辑工具选中一个透视平面"), 3500);
+    if (!event->mimeData()->hasUrls())
         return;
-    }
-    for (const QUrl &url : event->mimeData()->urls()) {
-        if (url.isLocalFile() && placeImage(url.toLocalFile())) {
-            event->acceptProposedAction();
+
+    // With no document loaded, the first valid dropped file opens the image
+    // directly. loadImage() also resets planes, history and view transform.
+    if (!m_hasLoadedImage) {
+        for (const QUrl &url : event->mimeData()->urls()) {
+            if (!url.isLocalFile() || QImageReader::imageFormat(url.toLocalFile()).isEmpty())
+                continue;
+            if (loadImage(url.toLocalFile()))
+                event->acceptProposedAction();
+            else
+                emit statusMessage(tr("无法打开拖入的图像"), 3500);
             return;
         }
+        return;
+    }
+
+    for (const QUrl &url : event->mimeData()->urls()) {
+        if (!url.isLocalFile() || QImageReader::imageFormat(url.toLocalFile()).isEmpty())
+            continue;
+        const QImage image(url.toLocalFile());
+        if (image.isNull()) {
+            emit statusMessage(tr("无法读取拖入的图像"), 3500);
+            return;
+        }
+        setFloatingImage(image, tr("图像已放到画布左上角，可拖入透视平面"));
+        event->acceptProposedAction();
+        return;
     }
 }
 
@@ -151,7 +177,8 @@ void PerspectiveCanvas::clearPainting()
 
 PerspectiveCanvas::CanvasState PerspectiveCanvas::captureState() const
 {
-    return CanvasState{m_planes, m_selectedPlane, m_pastedImage, m_pastedImagePosition};
+    return CanvasState{m_planes, m_selectedPlane, m_pastedImage, m_pastedImagePosition,
+                       m_pastedImageAttached, m_pastedSurfaceGroup, m_pastedHostPlane};
 }
 
 void PerspectiveCanvas::pasteClipboardImage()
@@ -169,11 +196,19 @@ void PerspectiveCanvas::pasteClipboardImage()
         return;
     }
 
+    setFloatingImage(image, tr("图像已粘贴到画布左上角"));
+}
+
+void PerspectiveCanvas::setFloatingImage(const QImage &image, const QString &statusText)
+{
     m_pastedImage = image.convertToFormat(QImage::Format_ARGB32);
     m_pastedImagePosition = QPointF(0, 0);
+    m_pastedImageAttached = false;
+    m_pastedSurfaceGroup = -1;
+    m_pastedHostPlane = -1;
     commitHistory();
     update();
-    emit statusMessage(tr("图像已粘贴到画布左上角"), 2500);
+    emit statusMessage(statusText, 3000);
 }
 
 void PerspectiveCanvas::restoreState(const CanvasState &state)
@@ -182,6 +217,9 @@ void PerspectiveCanvas::restoreState(const CanvasState &state)
     m_selectedPlane = state.selectedPlane;
     m_pastedImage = state.pastedImage;
     m_pastedImagePosition = state.pastedImagePosition;
+    m_pastedImageAttached = state.pastedImageAttached;
+    m_pastedSurfaceGroup = state.pastedSurfaceGroup;
+    m_pastedHostPlane = state.pastedHostPlane;
     m_creationPoints.clear();
     m_dragging = m_drawing = m_extruding = false;
     m_draggingPastedImage = false;
@@ -311,8 +349,7 @@ void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
         renderProjectedImage(painter, plane, plane.content);
         renderProjectedImage(painter, plane, plane.paint);
     }
-    if (!m_pastedImage.isNull())
-        painter.drawImage(m_pastedImagePosition, m_pastedImage);
+    renderPastedImage(painter);
 
     if (!showGuides)
         return;
@@ -369,6 +406,145 @@ QPointF PerspectiveCanvas::planeToUv(const Plane &plane, const QPointF &point, b
     if (ok)
         *ok = valid;
     return valid ? transform.map(point) : QPointF();
+}
+
+QPointF PerspectiveCanvas::planeToSurface(const Plane &plane, const QPointF &point,
+                                           bool *ok) const
+{
+    QTransform transform;
+    const bool valid = QTransform::quadToQuad(planePolygon(plane.corner),
+                                               planePolygon(plane.surfaceCorner), transform);
+    if (ok)
+        *ok = valid;
+    return valid ? transform.map(point) : QPointF();
+}
+
+void PerspectiveCanvas::renderPastedImage(QPainter &painter) const
+{
+    if (m_pastedImage.isNull())
+        return;
+    if (!m_pastedImageAttached) {
+        painter.drawImage(m_pastedImagePosition, m_pastedImage);
+        return;
+    }
+
+    int host = m_pastedHostPlane;
+    if (host < 0 || host >= m_planes.size() ||
+        m_planes[host].surfaceGroup != m_pastedSurfaceGroup) {
+        host = -1;
+        for (int i = 0; i < m_planes.size(); ++i) {
+            if (m_planes[i].surfaceGroup == m_pastedSurfaceGroup) {
+                host = i;
+                break;
+            }
+        }
+    }
+    if (host < 0) {
+        painter.drawImage(m_pastedImagePosition, m_pastedImage);
+        return;
+    }
+
+    const QRectF imageRect(QPointF(0, 0), QSizeF(m_pastedImage.size()));
+    QPainterPath hostClip;
+    hostClip.addRect(imageRect);
+
+    auto sourcePolygon = [this](const Plane &plane) {
+        QPolygonF polygon;
+        for (const QPointF &corner : plane.surfaceCorner)
+            polygon << corner - m_pastedImagePosition;
+        return polygon;
+    };
+    auto polygonPath = [](const QPolygonF &polygon) {
+        QPainterPath path;
+        path.addPolygon(polygon);
+        path.closeSubpath();
+        return path;
+    };
+
+    // Pixels belonging to another face are removed from the host projection,
+    // then redrawn with that face's homography. This avoids a doubled image at
+    // the seam while allowing the image to extend beyond the finite grid.
+    for (int i = 0; i < m_planes.size(); ++i) {
+        if (i == host || m_planes[i].surfaceGroup != m_pastedSurfaceGroup)
+            continue;
+        hostClip = hostClip.subtracted(polygonPath(sourcePolygon(m_planes[i])));
+    }
+
+    auto drawFace = [this, &painter, &sourcePolygon](const Plane &plane,
+                                                     const QPainterPath &clip) {
+        const QPolygonF source = sourcePolygon(plane);
+        QTransform projection;
+        if (!QTransform::quadToQuad(source, planePolygon(plane.corner), projection))
+            return;
+        painter.save();
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.setWorldTransform(projection, true);
+        // The clip is expressed in source-image coordinates, so install the
+        // image-to-canvas transform before giving the path to QPainter.
+        painter.setClipPath(clip, Qt::IntersectClip);
+        painter.drawImage(QPointF(0, 0), m_pastedImage);
+        painter.restore();
+    };
+
+    drawFace(m_planes[host], hostClip);
+    for (int i = 0; i < m_planes.size(); ++i) {
+        if (i == host || m_planes[i].surfaceGroup != m_pastedSurfaceGroup)
+            continue;
+        drawFace(m_planes[i], polygonPath(sourcePolygon(m_planes[i])));
+    }
+}
+
+bool PerspectiveCanvas::pastedImageAt(const QPointF &canvasPoint, QPointF *imagePoint,
+                                       int *planeIndex) const
+{
+    if (m_pastedImage.isNull())
+        return false;
+    const QRectF imageRect(QPointF(0, 0), QSizeF(m_pastedImage.size()));
+    if (!m_pastedImageAttached) {
+        const QPointF local = canvasPoint - m_pastedImagePosition;
+        if (!imageRect.contains(local))
+            return false;
+        if (imagePoint)
+            *imagePoint = local;
+        if (planeIndex)
+            *planeIndex = -1;
+        return true;
+    }
+
+    // Prefer the actual face under the pointer so shared edges use the face
+    // currently visible on top.
+    for (int i = m_planes.size() - 1; i >= 0; --i) {
+        const Plane &plane = m_planes[i];
+        if (plane.surfaceGroup != m_pastedSurfaceGroup ||
+            !planePolygon(plane.corner).containsPoint(canvasPoint, Qt::OddEvenFill))
+            continue;
+        bool ok = false;
+        const QPointF local = planeToSurface(plane, canvasPoint, &ok) -
+                              m_pastedImagePosition;
+        if (ok && imageRect.contains(local)) {
+            if (imagePoint)
+                *imagePoint = local;
+            if (planeIndex)
+                *planeIndex = i;
+            return true;
+        }
+    }
+
+    // The host projection deliberately continues outside its finite grid, so
+    // its visible extension must remain draggable too.
+    if (m_pastedHostPlane >= 0 && m_pastedHostPlane < m_planes.size()) {
+        bool ok = false;
+        const QPointF local = planeToSurface(m_planes[m_pastedHostPlane], canvasPoint, &ok) -
+                              m_pastedImagePosition;
+        if (ok && imageRect.contains(local)) {
+            if (imagePoint)
+                *imagePoint = local;
+            if (planeIndex)
+                *planeIndex = m_pastedHostPlane;
+            return true;
+        }
+    }
+    return false;
 }
 
 QVector<QPointF> PerspectiveCanvas::handles(const Plane &plane) const
@@ -520,12 +696,15 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     if (!m_background.rect().contains(point.toPoint()))
         return;
 
-    // The clipboard layer is directly manipulable regardless of the active
-    // perspective tool. Its hit area is its image bounds in document space.
-    const QRectF pastedImageRect(m_pastedImagePosition, QSizeF(m_pastedImage.size()));
-    if (!m_pastedImage.isNull() && pastedImageRect.contains(point)) {
+    QPointF grabbedImagePoint;
+    int grabbedPlane = -1;
+    if (pastedImageAt(point, &grabbedImagePoint, &grabbedPlane)) {
         m_draggingPastedImage = true;
         m_pastedDragStartPosition = m_pastedImagePosition;
+        m_pastedDragStartAttached = m_pastedImageAttached;
+        m_pastedDragStartSurfaceGroup = m_pastedSurfaceGroup;
+        m_pastedDragStartHostPlane = m_pastedHostPlane;
+        m_pastedDragOffset = grabbedImagePoint;
         m_pressImagePoint = point;
         m_stateChanged = false;
         setCursor(Qt::ClosedHandCursor);
@@ -538,6 +717,20 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             Plane plane;
             for (int i = 0; i < 4; ++i)
                 plane.corner[i] = m_creationPoints[i];
+            const qreal surfaceWidth = qMax(1.0,
+                (QLineF(plane.corner[0], plane.corner[1]).length() +
+                 QLineF(plane.corner[3], plane.corner[2]).length()) / 2.0);
+            const qreal surfaceHeight = qMax(1.0,
+                (QLineF(plane.corner[0], plane.corner[3]).length() +
+                 QLineF(plane.corner[1], plane.corner[2]).length()) / 2.0);
+            plane.surfaceCorner[0] = QPointF(0, 0);
+            plane.surfaceCorner[1] = QPointF(surfaceWidth, 0);
+            plane.surfaceCorner[2] = QPointF(surfaceWidth, surfaceHeight);
+            plane.surfaceCorner[3] = QPointF(0, surfaceHeight);
+            int nextSurfaceGroup = 0;
+            for (const Plane &existing : m_planes)
+                nextSurfaceGroup = qMax(nextSurfaceGroup, existing.surfaceGroup + 1);
+            plane.surfaceGroup = nextSurfaceGroup;
             plane.paint = QImage(TextureSize, TextureSize, QImage::Format_ARGB32);
             plane.paint.fill(Qt::transparent);
             plane.name = tr("平面 %1").arg(m_planes.size() + 1);
@@ -630,8 +823,39 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
     if (m_draggingPastedImage && (event->buttons() & Qt::LeftButton)) {
-        m_pastedImagePosition = m_pastedDragStartPosition + (point - m_pressImagePoint);
-        m_stateChanged = m_pastedImagePosition != m_pastedDragStartPosition;
+        const int targetPlane = planeAt(point);
+        bool mapped = false;
+        if (targetPlane >= 0) {
+            bool ok = false;
+            const QPointF surfacePoint = planeToSurface(m_planes[targetPlane], point, &ok);
+            if (ok) {
+                m_pastedImageAttached = true;
+                m_pastedSurfaceGroup = m_planes[targetPlane].surfaceGroup;
+                m_pastedHostPlane = targetPlane;
+                m_pastedImagePosition = surfacePoint - m_pastedDragOffset;
+                mapped = true;
+            }
+        }
+        if (!mapped && m_pastedImageAttached && m_pastedHostPlane >= 0 &&
+            m_pastedHostPlane < m_planes.size()) {
+            bool ok = false;
+            const QPointF surfacePoint =
+                planeToSurface(m_planes[m_pastedHostPlane], point, &ok);
+            if (ok) {
+                m_pastedImagePosition = surfacePoint - m_pastedDragOffset;
+                mapped = true;
+            }
+        }
+        if (!mapped) {
+            m_pastedImageAttached = false;
+            m_pastedSurfaceGroup = -1;
+            m_pastedHostPlane = -1;
+            m_pastedImagePosition = point - m_pastedDragOffset;
+        }
+        m_stateChanged = m_pastedImagePosition != m_pastedDragStartPosition ||
+                         m_pastedImageAttached != m_pastedDragStartAttached ||
+                         m_pastedSurfaceGroup != m_pastedDragStartSurfaceGroup ||
+                         m_pastedHostPlane != m_pastedDragStartHostPlane;
         update();
         return;
     }
@@ -678,8 +902,7 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 
 void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
 {
-    const QRectF pastedImageRect(m_pastedImagePosition, QSizeF(m_pastedImage.size()));
-    if (!m_pastedImage.isNull() && pastedImageRect.contains(imagePoint)) {
+    if (pastedImageAt(imagePoint)) {
         setCursor(Qt::OpenHandCursor);
         return;
     }
@@ -890,6 +1113,11 @@ PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &
                                                                     const QPointF &dragPoint) const
 {
     Plane result;
+    result.surfaceGroup = source.surfaceGroup;
+    result.surfaceCorner[0] = source.surfaceCorner[edge];
+    result.surfaceCorner[1] = source.surfaceCorner[(edge + 1) % 4];
+    result.surfaceCorner[2] = result.surfaceCorner[1];
+    result.surfaceCorner[3] = result.surfaceCorner[0];
     const QPointF a = source.corner[edge];
     const QPointF b = source.corner[(edge + 1) % 4];
     const QPointF midpoint = (a + b) / 2.0;
@@ -966,6 +1194,31 @@ PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &
             result.corner[3] = a;
         }
     }
+
+    // Unfold the perpendicular face around the shared edge. Both faces retain
+    // identical surface coordinates on the seam, while the new outer edge is
+    // placed on the side opposite the source face's interior.
+    const QPointF surfaceA = result.surfaceCorner[0];
+    const QPointF surfaceB = result.surfaceCorner[1];
+    const QPointF surfaceEdge = surfaceB - surfaceA;
+    const qreal surfaceEdgeLength = QLineF(surfaceA, surfaceB).length();
+    const qreal canvasEdgeLength = qMax(Epsilon, QLineF(a, b).length());
+    QPointF outward(-surfaceEdge.y(), surfaceEdge.x());
+    const qreal outwardLength = QLineF(QPointF(), outward).length();
+    if (outwardLength > Epsilon)
+        outward /= outwardLength;
+    QPointF sourceCenter;
+    for (const QPointF &corner : source.surfaceCorner)
+        sourceCenter += corner;
+    sourceCenter /= 4.0;
+    const QPointF seamCenter = (surfaceA + surfaceB) / 2.0;
+    if (QPointF::dotProduct(outward, sourceCenter - seamCenter) > 0.0)
+        outward = -outward;
+    const qreal canvasDepth = (QLineF(result.corner[0], result.corner[3]).length() +
+                               QLineF(result.corner[1], result.corner[2]).length()) / 2.0;
+    const qreal surfaceDepth = qMax(1.0, canvasDepth * surfaceEdgeLength / canvasEdgeLength);
+    result.surfaceCorner[2] = surfaceB + outward * surfaceDepth;
+    result.surfaceCorner[3] = surfaceA + outward * surfaceDepth;
     return result;
 }
 
@@ -1054,8 +1307,12 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
         pasteClipboardImage();
         event->accept();
     } else if (event->key() == Qt::Key_Escape) {
-        if (m_draggingPastedImage)
+        if (m_draggingPastedImage) {
             m_pastedImagePosition = m_pastedDragStartPosition;
+            m_pastedImageAttached = m_pastedDragStartAttached;
+            m_pastedSurfaceGroup = m_pastedDragStartSurfaceGroup;
+            m_pastedHostPlane = m_pastedDragStartHostPlane;
+        }
         m_creationPoints.clear();
         m_dragging = m_drawing = m_extruding = false;
         m_draggingPastedImage = false;
@@ -1063,7 +1320,24 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
         m_hasExtrudePreview = false;
         update();
     } else if (event->key() == Qt::Key_Delete && m_tool == EditPlane && m_selectedPlane >= 0) {
-        m_planes.removeAt(m_selectedPlane);
+        const int removedPlane = m_selectedPlane;
+        m_planes.removeAt(removedPlane);
+        if (m_pastedHostPlane > removedPlane) {
+            --m_pastedHostPlane;
+        } else if (m_pastedHostPlane == removedPlane) {
+            m_pastedHostPlane = -1;
+            for (int i = 0; i < m_planes.size(); ++i) {
+                if (m_planes[i].surfaceGroup == m_pastedSurfaceGroup) {
+                    m_pastedHostPlane = i;
+                    break;
+                }
+            }
+            if (m_pastedHostPlane < 0) {
+                m_pastedImageAttached = false;
+                m_pastedSurfaceGroup = -1;
+                m_pastedImagePosition = QPointF(0, 0);
+            }
+        }
         m_selectedPlane = qMin(m_selectedPlane, m_planes.size() - 1);
         commitHistory();
         update();

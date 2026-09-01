@@ -57,6 +57,11 @@ private:
     // the placed image and the transparent paint/stamp layer.
     struct Plane {
         QPointF corner[4];
+        // Adjacent planes share an unfolded 2D surface.  These coordinates
+        // let one floating image cross a seam while each face still uses its
+        // own canvas homography.
+        QPointF surfaceCorner[4];
+        int surfaceGroup = -1;
         QImage content;
         QImage paint;
         QString name;
@@ -69,6 +74,9 @@ private:
         int selectedPlane = -1;
         QImage pastedImage;
         QPointF pastedImagePosition;
+        bool pastedImageAttached = false;
+        int pastedSurfaceGroup = -1;
+        int pastedHostPlane = -1;
     };
 
     // Convert between widget coordinates (after zoom/centering) and the
@@ -84,8 +92,14 @@ private:
     // unit square to the user's four-point quadrilateral in both directions.
     QPointF planeToUv(const Plane &plane, const QPointF &point, bool *ok = nullptr) const;
     QPointF uvToPlane(const Plane &plane, const QPointF &uv) const;
+    QPointF planeToSurface(const Plane &plane, const QPointF &point,
+                           bool *ok = nullptr) const;
     void renderScene(QPainter &painter, bool showGuides) const;
     void renderProjectedImage(QPainter &painter, const Plane &plane, const QImage &texture) const;
+    void renderPastedImage(QPainter &painter) const;
+    bool pastedImageAt(const QPointF &canvasPoint, QPointF *imagePoint = nullptr,
+                       int *planeIndex = nullptr) const;
+    void setFloatingImage(const QImage &image, const QString &statusText);
     void drawPlaneGuides(QPainter &painter, const Plane &plane, bool selected) const;
     // Apply one brush dab in texture space; perspective is introduced later
     // when this texture is projected back onto the plane.
@@ -106,12 +120,19 @@ private:
                                    qreal *t = nullptr);
 
     QImage m_background;
-    // A clipboard paste is kept as a separate bitmap layer.  It is intentionally
-    // independent from perspective planes: Ctrl+V places the image at the
-    // document's top-left corner without resizing or warping it.
+    // Before attachment this is a canvas-space position.  After the image is
+    // dragged onto a plane it becomes a position in that plane group's shared
+    // unfolded surface coordinates.
     QImage m_pastedImage;
     QPointF m_pastedImagePosition;
     QPointF m_pastedDragStartPosition;
+    QPointF m_pastedDragOffset;
+    bool m_pastedImageAttached = false;
+    int m_pastedSurfaceGroup = -1;
+    int m_pastedHostPlane = -1;
+    bool m_pastedDragStartAttached = false;
+    int m_pastedDragStartSurfaceGroup = -1;
+    int m_pastedDragStartHostPlane = -1;
     bool m_hasLoadedImage = false;
     QVector<Plane> m_planes;
     QVector<QPointF> m_creationPoints;
