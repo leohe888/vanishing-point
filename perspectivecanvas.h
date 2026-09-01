@@ -20,6 +20,7 @@ public:
     bool saveResult(const QString &fileName) const;
     bool placeImage(const QString &fileName);
     bool hasSelectedPlane() const { return m_selectedPlane >= 0 && m_selectedPlane < m_planes.size(); }
+    bool hasLoadedImage() const { return m_hasLoadedImage; }
     QColor brushColor() const { return m_brushColor; }
 
 public slots:
@@ -37,6 +38,7 @@ signals:
     void toolChangeRequested(Tool tool);
     void canUndoChanged(bool available);
     void canRedoChanged(bool available);
+    void documentAvailabilityChanged(bool available);
 
 protected:
     void paintEvent(QPaintEvent *) override;

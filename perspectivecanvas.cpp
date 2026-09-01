@@ -57,12 +57,6 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
     m_background = QImage(1200, 800, QImage::Format_ARGB32);
     QPainter p(&m_background);
     p.fillRect(m_background.rect(), QColor("#26292d"));
-    for (int y = 0; y < m_background.height(); y += 40) {
-        for (int x = 0; x < m_background.width(); x += 40) {
-            if (((x / 40) + (y / 40)) % 2 == 0)
-                p.fillRect(x, y, 40, 40, QColor("#2d3035"));
-        }
-    }
     updateViewTransform();
     resetHistory();
 }
@@ -74,6 +68,7 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
         return false;
     m_background = image.convertToFormat(QImage::Format_ARGB32);
     m_hasLoadedImage = true;
+    emit documentAvailabilityChanged(true);
     m_planes.clear();
     m_creationPoints.clear();
     m_selectedPlane = -1;
@@ -87,10 +82,8 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
 
 bool PerspectiveCanvas::saveResult(const QString &fileName) const
 {
-    // Start with transparent pixels. renderScene() deliberately skips the
-    // editor-only placeholder/checker background when no real image was loaded.
     QImage result(m_background.size(), QImage::Format_ARGB32);
-    result.fill(Qt::transparent);
+    result.fill(Qt::white);
     QPainter painter(&result);
     renderScene(painter, false);
     painter.end();
@@ -269,11 +262,9 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
 
 void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
 {
-    // The generated checker/dark background is only a canvas aid. Export it
-    // only when the user actually opened a background image; otherwise the
-    // already-transparent result image remains transparent outside content.
-    if (showGuides || m_hasLoadedImage)
-        painter.drawImage(QPointF(0, 0), m_background);
+    // The canvas background is part of the document output and is always
+    // rendered. The showGuides flag controls only editor overlays below.
+    painter.drawImage(QPointF(0, 0), m_background);
     if (showGuides && !m_hasLoadedImage && m_planes.isEmpty() && m_creationPoints.isEmpty()) {
         painter.save();
         painter.setPen(QColor("#89919b"));
@@ -281,7 +272,7 @@ void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
         placeholderFont.setPointSize(20);
         painter.setFont(placeholderFont);
         painter.drawText(m_background.rect(), Qt::AlignCenter,
-                         tr("打开一张图像，或直接在此画布上创建透视平面"));
+                         tr("请打开一张图片开始操作"));
         painter.restore();
     }
     // Draw placed content first, then paint/stamp marks on top of it.
@@ -488,6 +479,10 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     if (event->button() != Qt::LeftButton)
         return;
     setFocus();
+    if (!m_hasLoadedImage) {
+        emit statusMessage(tr("请先打开一张图片，然后再创建平面或进行编辑。"), 3500);
+        return;
+    }
     const QPointF point = toImage(event->position());
     if (!m_background.rect().contains(point.toPoint()))
         return;

@@ -35,7 +35,6 @@ void MainWindow::buildUi()
     auto *fileBar = addToolBar(tr("文件"));
     fileBar->setMovable(false);
     auto *openAction = fileBar->addAction(tr("打开图像"));
-    auto *placeAction = fileBar->addAction(tr("置入图片"));
     auto *saveAction = fileBar->addAction(tr("导出结果"));
     fileBar->addSeparator();
     auto *undoAction = fileBar->addAction(tr("撤销"));
@@ -49,6 +48,8 @@ void MainWindow::buildUi()
     redoAction->setShortcuts(redoShortcuts);
     fileBar->addSeparator();
     auto *clearPaintAction = fileBar->addAction(tr("清除绘画"));
+    clearPaintAction->setEnabled(false);
+    saveAction->setEnabled(false);
 
     auto *root = new QWidget(this);
     auto *rootLayout = new QHBoxLayout(root);
@@ -79,6 +80,8 @@ void MainWindow::buildUi()
         sideLayout->addWidget(button);
     }
     m_tools->button(0)->setChecked(true);
+    for (QAbstractButton *button : m_tools->buttons())
+        button->setEnabled(false);
 
     // Keep the numeric label and slider together so tool-specific visibility
     // can hide an entire option row without leaving orphaned controls.
@@ -150,10 +153,15 @@ void MainWindow::buildUi()
                       border-radius:4px; text-align:left; padding-left:12px; }
         QToolButton:hover { background:#464c54; }
         QToolButton:checked { color:white; background:#1769aa; border-color:#2785d0; }
+        QToolButton:disabled { color:#707780; background:#292d32; border-color:#353a40; }
+        QToolBar QToolButton:disabled { color:#737981; background:transparent; border:none; }
         QPushButton { color:#e8eaed; background:#42474e; border:1px solid #555b64;
                       border-radius:3px; padding:4px 8px; }
+        QPushButton:disabled { color:#6f757c; background:#2a2e33; border-color:#383d43; }
         QSlider::groove:horizontal { height:4px; background:#555a62; border-radius:2px; }
         QSlider::handle:horizontal { width:14px; margin:-5px 0; background:#4aa3df; border-radius:7px; }
+        QSlider:disabled::groove:horizontal { background:#353a40; }
+        QSlider:disabled::handle:horizontal { background:#626870; }
     )");
 
     // Tool buttons update both the canvas mode and the visible parameter set.
@@ -182,19 +190,9 @@ void MainWindow::buildUi()
         if (!file.isEmpty() && !m_canvas->loadImage(file))
             QMessageBox::warning(this, tr("打开失败"), tr("无法读取该图像。"));
     });
-    connect(placeAction, &QAction::triggered, this, [this] {
-        if (!m_canvas->hasSelectedPlane()) {
-            QMessageBox::information(this, tr("置入图片"), tr("请先使用编辑工具选中一个透视平面。"));
-            return;
-        }
-        const QString file = QFileDialog::getOpenFileName(this, tr("选择要置入的图片"), {},
-            tr("图像 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*)"));
-        if (!file.isEmpty() && !m_canvas->placeImage(file))
-            QMessageBox::warning(this, tr("置入失败"), tr("无法读取该图片。"));
-    });
     connect(saveAction, &QAction::triggered, this, [this] {
         const QString file = QFileDialog::getSaveFileName(this, tr("导出结果"), "vanishing-point.png",
-                                                          tr("PNG 图像（支持透明） (*.png)"));
+                                                          tr("PNG 图像 (*.png);;JPEG 图像 (*.jpg *.jpeg)"));
         if (!file.isEmpty() && !m_canvas->saveResult(file))
             QMessageBox::warning(this, tr("保存失败"), tr("无法写入目标文件。"));
     });
@@ -203,6 +201,13 @@ void MainWindow::buildUi()
     connect(redoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::redo);
     connect(m_canvas, &PerspectiveCanvas::canUndoChanged, undoAction, &QAction::setEnabled);
     connect(m_canvas, &PerspectiveCanvas::canRedoChanged, redoAction, &QAction::setEnabled);
+    connect(m_canvas, &PerspectiveCanvas::documentAvailabilityChanged, this,
+            [this, saveAction, clearPaintAction](bool available) {
+                saveAction->setEnabled(available);
+                clearPaintAction->setEnabled(available);
+                for (QAbstractButton *button : m_tools->buttons())
+                    button->setEnabled(available);
+            });
     connect(m_canvas, &PerspectiveCanvas::statusMessage, statusBar(), &QStatusBar::showMessage);
     updateToolOptions(PerspectiveCanvas::CreatePlane);
     statusBar()->showMessage(tr("使用创建平面工具依次点击四个点"));
