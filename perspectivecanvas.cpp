@@ -211,6 +211,45 @@ void PerspectiveCanvas::setFloatingImage(const QImage &image, const QString &sta
     emit statusMessage(statusText, 3000);
 }
 
+void PerspectiveCanvas::rotateFloatingImage()
+{
+    if (m_pastedImage.isNull()) {
+        emit statusMessage(tr("请先粘贴或拖入一张浮动图像"), 2500);
+        return;
+    }
+    // Rotate the bitmap itself, preserving its current top-left position in
+    // either canvas coordinates or the shared unfolded surface coordinates.
+    m_pastedImage = m_pastedImage.transformed(QTransform().rotate(90),
+                                               Qt::SmoothTransformation);
+    commitHistory();
+    update();
+    emit statusMessage(tr("浮动图像已顺时针旋转 90°"), 2200);
+}
+
+void PerspectiveCanvas::flipFloatingImageHorizontal()
+{
+    if (m_pastedImage.isNull()) {
+        emit statusMessage(tr("请先粘贴或拖入一张浮动图像"), 2500);
+        return;
+    }
+    m_pastedImage = m_pastedImage.mirrored(true, false);
+    commitHistory();
+    update();
+    emit statusMessage(tr("浮动图像已水平翻转"), 2200);
+}
+
+void PerspectiveCanvas::flipFloatingImageVertical()
+{
+    if (m_pastedImage.isNull()) {
+        emit statusMessage(tr("请先粘贴或拖入一张浮动图像"), 2500);
+        return;
+    }
+    m_pastedImage = m_pastedImage.mirrored(false, true);
+    commitHistory();
+    update();
+    emit statusMessage(tr("浮动图像已垂直翻转"), 2200);
+}
+
 void PerspectiveCanvas::restoreState(const CanvasState &state)
 {
     m_planes = state.planes;

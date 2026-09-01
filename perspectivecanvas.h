@@ -31,6 +31,9 @@ public slots:
     void setBrushColor(const QColor &color) { m_brushColor = color; }
     void clearPainting();
     void pasteClipboardImage();
+    void rotateFloatingImage();
+    void flipFloatingImageHorizontal();
+    void flipFloatingImageVertical();
     void undo();
     void redo();
 
