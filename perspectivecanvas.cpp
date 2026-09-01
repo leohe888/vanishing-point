@@ -1,5 +1,7 @@
 #include "perspectivecanvas.h"
 
+#include <QApplication>
+#include <QClipboard>
 #include <QKeyEvent>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -70,6 +72,8 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
     m_hasLoadedImage = true;
     emit documentAvailabilityChanged(true);
     m_planes.clear();
+    m_pastedImage = QImage();
+    m_pastedImagePosition = QPointF();
     m_creationPoints.clear();
     m_selectedPlane = -1;
     m_hasCloneSource = false;
@@ -147,15 +151,40 @@ void PerspectiveCanvas::clearPainting()
 
 PerspectiveCanvas::CanvasState PerspectiveCanvas::captureState() const
 {
-    return CanvasState{m_planes, m_selectedPlane};
+    return CanvasState{m_planes, m_selectedPlane, m_pastedImage, m_pastedImagePosition};
+}
+
+void PerspectiveCanvas::pasteClipboardImage()
+{
+    // QClipboard performs the platform-specific conversion from common image
+    // formats (PNG, BMP, etc.) to QImage.
+    const QClipboard *clipboard = QApplication::clipboard();
+    const QImage image = clipboard ? clipboard->image() : QImage();
+    if (image.isNull()) {
+        emit statusMessage(tr("剪切板中没有可粘贴的图像"), 2500);
+        return;
+    }
+    if (!m_hasLoadedImage) {
+        emit statusMessage(tr("请先打开一张图片，再粘贴图像"), 3000);
+        return;
+    }
+
+    m_pastedImage = image.convertToFormat(QImage::Format_ARGB32);
+    m_pastedImagePosition = QPointF(0, 0);
+    commitHistory();
+    update();
+    emit statusMessage(tr("图像已粘贴到画布左上角"), 2500);
 }
 
 void PerspectiveCanvas::restoreState(const CanvasState &state)
 {
     m_planes = state.planes;
     m_selectedPlane = state.selectedPlane;
+    m_pastedImage = state.pastedImage;
+    m_pastedImagePosition = state.pastedImagePosition;
     m_creationPoints.clear();
     m_dragging = m_drawing = m_extruding = false;
+    m_draggingPastedImage = false;
     m_hasExtrudePreview = false;
     m_stateChanged = false;
     update();
@@ -211,6 +240,7 @@ void PerspectiveCanvas::setTool(Tool tool)
     m_tool = tool;
     m_creationPoints.clear();
     m_dragging = m_drawing = false;
+    m_draggingPastedImage = false;
     setCursor(tool == EditPlane ? Qt::SizeAllCursor : Qt::CrossCursor);
     const QString messages[] = {
         tr("依次单击四个角点以创建平面"),
@@ -275,11 +305,14 @@ void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
                          tr("请打开一张图片开始操作"));
         painter.restore();
     }
-    // Draw placed content first, then paint/stamp marks on top of it.
+    // Draw plane content first. The clipboard image remains a top-level,
+    // directly movable layer until a later operation explicitly consumes it.
     for (const Plane &plane : m_planes) {
         renderProjectedImage(painter, plane, plane.content);
         renderProjectedImage(painter, plane, plane.paint);
     }
+    if (!m_pastedImage.isNull())
+        painter.drawImage(m_pastedImagePosition, m_pastedImage);
 
     if (!showGuides)
         return;
@@ -487,6 +520,18 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     if (!m_background.rect().contains(point.toPoint()))
         return;
 
+    // The clipboard layer is directly manipulable regardless of the active
+    // perspective tool. Its hit area is its image bounds in document space.
+    const QRectF pastedImageRect(m_pastedImagePosition, QSizeF(m_pastedImage.size()));
+    if (!m_pastedImage.isNull() && pastedImageRect.contains(point)) {
+        m_draggingPastedImage = true;
+        m_pastedDragStartPosition = m_pastedImagePosition;
+        m_pressImagePoint = point;
+        m_stateChanged = false;
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
+
     if (m_tool == CreatePlane) {
         m_creationPoints.append(point);
         if (m_creationPoints.size() == 4) {
@@ -584,6 +629,12 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
+    if (m_draggingPastedImage && (event->buttons() & Qt::LeftButton)) {
+        m_pastedImagePosition = m_pastedDragStartPosition + (point - m_pressImagePoint);
+        m_stateChanged = m_pastedImagePosition != m_pastedDragStartPosition;
+        update();
+        return;
+    }
     if (m_tool == EditPlane && m_dragging && m_selectedPlane >= 0) {
         Plane &plane = m_planes[m_selectedPlane];
         if (m_extruding) {
@@ -621,12 +672,21 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
         update();
         return;
     }
-    if (m_tool == EditPlane && !m_dragging)
+    if (!m_dragging)
         updateHoverCursor(point);
 }
 
 void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
 {
+    const QRectF pastedImageRect(m_pastedImagePosition, QSizeF(m_pastedImage.size()));
+    if (!m_pastedImage.isNull() && pastedImageRect.contains(imagePoint)) {
+        setCursor(Qt::OpenHandCursor);
+        return;
+    }
+    if (m_tool != EditPlane) {
+        setCursor(Qt::CrossCursor);
+        return;
+    }
     if (m_selectedPlane < 0 || m_selectedPlane >= m_planes.size()) {
         setCursor(Qt::ArrowCursor);
         return;
@@ -682,13 +742,13 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
         }
     }
     m_dragging = m_drawing = m_extruding = false;
+    m_draggingPastedImage = false;
     m_hasExtrudePreview = false;
     m_cloneStrokeStarted = false;
     m_dragHandle = m_dragEdge = -1;
     if (m_stateChanged)
         commitHistory();
-    if (m_tool == EditPlane)
-        updateHoverCursor(toImage(event->position()));
+    updateHoverCursor(toImage(event->position()));
     update();
 }
 
@@ -990,9 +1050,16 @@ void PerspectiveCanvas::applyDab(Plane &plane, const QPointF &uv, bool stamp)
 
 void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
 {
-    if (event->key() == Qt::Key_Escape) {
+    if (event->matches(QKeySequence::Paste)) {
+        pasteClipboardImage();
+        event->accept();
+    } else if (event->key() == Qt::Key_Escape) {
+        if (m_draggingPastedImage)
+            m_pastedImagePosition = m_pastedDragStartPosition;
         m_creationPoints.clear();
         m_dragging = m_drawing = m_extruding = false;
+        m_draggingPastedImage = false;
+        m_stateChanged = false;
         m_hasExtrudePreview = false;
         update();
     } else if (event->key() == Qt::Key_Delete && m_tool == EditPlane && m_selectedPlane >= 0) {

@@ -180,6 +180,10 @@ void MainWindow::buildUi()
         auto *shortcut = new QShortcut(shortcuts[i], this);
         connect(shortcut, &QShortcut::activated, m_tools->button(i), &QAbstractButton::click);
     }
+    auto *pasteShortcut = new QShortcut(QKeySequence::Paste, this);
+    pasteShortcut->setContext(Qt::WindowShortcut);
+    connect(pasteShortcut, &QShortcut::activated,
+            m_canvas, &PerspectiveCanvas::pasteClipboardImage);
     connect(m_diameter, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushDiameter);
     connect(m_hardness, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushHardness);
     connect(m_opacity, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushOpacity);

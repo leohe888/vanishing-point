@@ -30,6 +30,7 @@ public slots:
     void setBrushOpacity(int value) { m_opacity = value / 100.0; }
     void setBrushColor(const QColor &color) { m_brushColor = color; }
     void clearPainting();
+    void pasteClipboardImage();
     void undo();
     void redo();
 
@@ -66,6 +67,8 @@ private:
     struct CanvasState {
         QVector<Plane> planes;
         int selectedPlane = -1;
+        QImage pastedImage;
+        QPointF pastedImagePosition;
     };
 
     // Convert between widget coordinates (after zoom/centering) and the
@@ -103,6 +106,12 @@ private:
                                    qreal *t = nullptr);
 
     QImage m_background;
+    // A clipboard paste is kept as a separate bitmap layer.  It is intentionally
+    // independent from perspective planes: Ctrl+V places the image at the
+    // document's top-left corner without resizing or warping it.
+    QImage m_pastedImage;
+    QPointF m_pastedImagePosition;
+    QPointF m_pastedDragStartPosition;
     bool m_hasLoadedImage = false;
     QVector<Plane> m_planes;
     QVector<QPointF> m_creationPoints;
@@ -113,6 +122,7 @@ private:
     bool m_dragging = false;
     bool m_drawing = false;
     bool m_extruding = false;
+    bool m_draggingPastedImage = false;
     QPointF m_pressImagePoint;
     QPointF m_lastImagePoint;
     QPointF m_lastUv;
