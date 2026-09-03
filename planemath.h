@@ -6,15 +6,25 @@
 #include <QString>
 #include <QVector>
 
-// 一个平面保存其在画布和展开曲面上的几何信息，以及一张供画笔
-// 使用的透明绘画纹理。
-struct Plane {
+// 一个面片：画布上的透视四边形，以及它在展开曲面上的对应四边形。
+//
+// 这是本项目最基础的结构，有两种用法：
+//  1. 平面（Plane 继承它）用它描述自己的几何；
+//  2. 浮动图像在吸附瞬间把它拷贝一份作为快照。
+//
+// 快照正是内容与平面解耦的关键：内容渲染时只认自己那一份拷贝，
+// 因此之后删除或修改平面都不会影响已经存在的内容。
+struct Facet {
     QPointF corner[4];
     // 相邻平面共享一个展开的 2D 曲面。这些坐标允许同一张浮动图像
     // 跨越接缝，而每个面仍使用各自到画布的单应变换。
     QPointF surfaceCorner[4];
+};
+
+// 平面只描述透视规则，不持有任何内容——绘画烘焙在画布的绘画层上，
+// 浮动图像各自携带几何快照。平面可以被自由增删改而不波及内容。
+struct Plane : Facet {
     int surfaceGroup = -1;  // 所属的展开曲面分组（共享曲面的相邻平面同组）
-    QImage paint;           // 该平面的绘画纹理（UV 空间）
     QString name;           // 显示用的平面名称
 };
 
@@ -29,23 +39,24 @@ constexpr qreal Epsilon = 1e-6; // 浮点比较用的极小量
 
 // —— 基础几何 ——
 QPolygonF planePolygon(const QPointF corner[4]);   // 把 4 个角点组装为多边形
-QVector<QPointF> handles(const Plane &plane);      // 平面的 4 个角点 + 4 个边中点
+QVector<QPointF> handles(const Facet &facet);      // 面片的 4 个角点 + 4 个边中点
 // 计算点 p 到线段 ab 的距离；t 返回最近点在线段上的参数化位置（0~1）
 qreal distanceToSegment(const QPointF &p, const QPointF &a,
                         const QPointF &b, qreal *t = nullptr);
-bool isValidPlane(const Plane &plane);             // 校验平面是否为有效的凸四边形
+bool isValidPlane(const Facet &facet);             // 校验是否为有效的凸四边形
 
 // —— 坐标变换（单应） ——
-QPointF uvToPlane(const Plane &plane, const QPointF &uv);          // 归一化 UV -> 图像坐标
-QPointF planeToUv(const Plane &plane, const QPointF &point,        // 图像坐标 -> 归一化 UV
-                 bool *ok = nullptr);
-QPointF planeToSurface(const Plane &plane, const QPointF &point,   // 图像坐标 -> 共享展开曲面坐标
+// 这些函数接受 Facet，因此既能作用于平面，也能作用于浮动图像的几何快照。
+QPointF uvToPlane(const Facet &facet, const QPointF &uv);             // 归一化 UV -> 图像坐标
+QPointF planeToUv(const Facet &facet, const QPointF &point,           // 图像坐标 -> 归一化 UV
+                  bool *ok = nullptr);
+QPointF planeToSurface(const Facet &facet, const QPointF &point,      // 图像坐标 -> 展开曲面坐标
                        bool *ok = nullptr);
 
 // —— 命中测试（tolerance 为图像坐标系下的拾取半径） ——
 int planeAt(const QVector<Plane> &planes, const QPointF &point);        // 点所在的最上层平面
-int handleAt(const Plane &plane, const QPointF &point, qreal tolerance); // 控制点索引
-int edgeAt(const Plane &plane, const QPointF &point, qreal tolerance);   // 边缘索引
+int handleAt(const Facet &facet, const QPointF &point, qreal tolerance); // 控制点索引
+int edgeAt(const Facet &facet, const QPointF &point, qreal tolerance);   // 边缘索引
 
 // —— 平面构造算法（pressPoint 为本次拖动的按下起点） ——
 // 沿某条边方向缩放平面：只改变该边到对边的距离，保持透视关系不变
