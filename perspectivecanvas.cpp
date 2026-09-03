@@ -39,13 +39,12 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
             this, &PerspectiveCanvas::documentAvailabilityChanged);
 }
 
-// 从文件加载背景图像，并清空交互状态、仿制源与视图变换
+// 从文件加载背景图像，并清空交互状态与视图变换
 bool PerspectiveCanvas::loadImage(const QString &fileName)
 {
     if (!m_doc.loadImage(fileName))
         return false;
     m_creationPoints.clear();
-    m_paint.clearCloneSource();
     updateViewTransform();
     update();
     emit statusMessage(tr("图像已打开。请依次点击四个点创建透视平面。"), 5000);
@@ -224,7 +223,6 @@ void PerspectiveCanvas::setTool(Tool tool)
     const QString messages[] = {
         tr("依次单击四个角点以创建平面"),
         tr("拖动控制点或平面；按住 Ctrl 从边缘拖出垂直于当前平面的平面"),
-        tr("Alt+单击设置仿制源，然后拖动进行仿制"),
         tr("在平面内拖动进行透视绘画")
     };
     emit statusMessage(messages[tool]);
@@ -451,20 +449,9 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     const QPointF uv = planeToUv(m_doc.planes()[planeIndex], point, &ok);
     if (!ok)
         return;
-    if (m_tool == StampTool && (event->modifiers() & Qt::AltModifier)) {
-        m_paint.setCloneSource(uv, planeIndex);
-        emit statusMessage(tr("仿制源已设置。现在可单击并拖动进行仿制。"), 3500);
-        update();
-        return;
-    }
-    if (m_tool == StampTool && !m_paint.hasCloneSource()) {
-        emit statusMessage(tr("请先按住 Alt 并在平面中单击，以设置仿制源"), 3500);
-        return;
-    }
     m_drawing = true;
     m_lastImagePoint = point;
-    m_paint.beginStroke(m_doc.planes(), m_doc.background(), planeIndex, uv,
-                        m_tool == StampTool);
+    m_paint.beginStroke(m_doc.planes(), planeIndex, uv);
     m_stateChanged = true;
     update();
 }
@@ -544,8 +531,7 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
         return;
     }
     if (m_drawing && (event->buttons() & Qt::LeftButton)) {
-        m_paint.drawStrokeTo(m_doc.planes(), m_doc.background(),
-                             m_doc.selectedPlane(), point, m_tool == StampTool);
+        m_paint.drawStrokeTo(m_doc.planes(), m_doc.selectedPlane(), point);
         update();
         return;
     }
@@ -622,7 +608,6 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
     m_dragging = m_drawing = m_extruding = false;
     m_draggingPastedImage = false;
     m_hasExtrudePreview = false;
-    m_paint.endStroke();
     m_dragHandle = m_dragEdge = -1;
     if (m_stateChanged)
         m_doc.commitHistory();

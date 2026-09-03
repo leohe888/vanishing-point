@@ -76,7 +76,7 @@ void MainWindow::buildUi()
     m_tools = new QButtonGroup(this);
     m_tools->setExclusive(true);
     const QStringList toolNames{tr("创建平面  (C)"), tr("编辑平面  (V)"),
-                                tr("图章工具  (S)"), tr("画笔工具  (B)")};
+                                tr("画笔工具  (B)")};
     for (int i = 0; i < toolNames.size(); ++i) {
         auto *button = new QToolButton(side);
         button->setText(toolNames[i]);
@@ -136,7 +136,7 @@ void MainWindow::buildUi()
     colorLayout->addWidget(colorButton);
     sideLayout->addWidget(m_colorRow);
 
-    auto *hint = new QLabel(tr("创建：依次点击四个角点\n编辑：拖动控制点；Ctrl+拖出垂直于当前平面的平面\n图章：Alt+单击设置源点\n画笔/图章：拖动绘制"), side);
+    auto *hint = new QLabel(tr("创建：依次点击四个角点\n编辑：拖动控制点；Ctrl+拖出垂直于当前平面的平面\n画笔：在平面内拖动绘制"), side);
     hint->setWordWrap(true);
     hint->setObjectName("hint");
     sideLayout->addStretch();
@@ -183,7 +183,7 @@ void MainWindow::buildUi()
                     button->click();
             });
     const QList<QKeySequence> shortcuts{QKeySequence("C"), QKeySequence("V"),
-                                        QKeySequence("S"), QKeySequence("B")};
+                                        QKeySequence("B")};
     for (int i = 0; i < shortcuts.size(); ++i) {
         auto *shortcut = new QShortcut(shortcuts[i], this);
         connect(shortcut, &QShortcut::activated, m_tools->button(i), &QAbstractButton::click);
@@ -235,19 +235,16 @@ void MainWindow::buildUi()
 
 void MainWindow::updateToolOptions(int toolId)
 {
-    // 图章工具复用笔刷的几何参数，但颜色取自源图像；只有画笔工具
-    // 需要用户自选前景色。
-    const bool isPaintingTool = toolId == PerspectiveCanvas::StampTool ||
-                                toolId == PerspectiveCanvas::BrushTool;
+    // 只有画笔工具需要显示笔刷几何参数与前景色选项。
     const bool isBrushTool = toolId == PerspectiveCanvas::BrushTool;
 
-    m_brushTitle->setVisible(isPaintingTool);
-    m_diameterRow->setVisible(isPaintingTool);
-    m_diameter->setVisible(isPaintingTool);
-    m_hardnessRow->setVisible(isPaintingTool);
-    m_hardness->setVisible(isPaintingTool);
-    m_opacityRow->setVisible(isPaintingTool);
-    m_opacity->setVisible(isPaintingTool);
+    m_brushTitle->setVisible(isBrushTool);
+    m_diameterRow->setVisible(isBrushTool);
+    m_diameter->setVisible(isBrushTool);
+    m_hardnessRow->setVisible(isBrushTool);
+    m_hardness->setVisible(isBrushTool);
+    m_opacityRow->setVisible(isBrushTool);
+    m_opacity->setVisible(isBrushTool);
     m_colorRow->setVisible(isBrushTool);
 }
 

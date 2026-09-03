@@ -19,7 +19,7 @@ class PerspectiveCanvas : public QWidget
 {
     Q_OBJECT
 public:
-    enum Tool { CreatePlane, EditPlane, StampTool, BrushTool }; // 工具枚举：创建平面/编辑平面/图章/画笔
+    enum Tool { CreatePlane, EditPlane, BrushTool }; // 工具枚举：创建平面/编辑平面/画笔
     Q_ENUM(Tool)
 
     explicit PerspectiveCanvas(QWidget *parent = nullptr);
@@ -80,7 +80,7 @@ private:
     void finishPlaneCreation();
 
     CanvasDocument m_doc;                     // 文档模型（平面、浮动图像、历史）
-    PaintEngine m_paint;                      // 笔刷/仿制图章引擎
+    PaintEngine m_paint;                      // 笔刷引擎
     QVector<QPointF> m_creationPoints;        // 创建平面过程中已点击的角点
     Tool m_tool = CreatePlane;                // 当前工具
     int m_dragHandle = -1;                    // 正在拖动的控制点索引
