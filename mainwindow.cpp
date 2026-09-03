@@ -18,6 +18,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+// 构建并初始化主窗口的全部界面
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     buildUi();
@@ -27,8 +28,8 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::buildUi()
 {
-    // The main window owns only the controls. All geometry, rendering and
-    // interaction state live in PerspectiveCanvas.
+    // 主窗口只负责控件本身。所有几何、渲染与交互状态都保存在
+    // PerspectiveCanvas 中。
     setWindowTitle(tr("消失点 / Vanishing Point"));
     resize(1280, 820);
 
@@ -90,8 +91,8 @@ void MainWindow::buildUi()
     for (QAbstractButton *button : m_tools->buttons())
         button->setEnabled(false);
 
-    // Keep the numeric label and slider together so tool-specific visibility
-    // can hide an entire option row without leaving orphaned controls.
+    // 把数值标签与滑块放在同一行容器里，这样按工具切换可见性时
+    // 可以整行隐藏，不会留下孤立的控件。
     auto addSlider = [side, sideLayout](const QString &name, int minimum, int maximum,
                                         int value, QWidget **rowOutput) {
         auto *row = new QWidget(side);
@@ -171,7 +172,7 @@ void MainWindow::buildUi()
         QSlider:disabled::handle:horizontal { background:#626870; }
     )");
 
-    // Tool buttons update both the canvas mode and the visible parameter set.
+    // 工具按钮同时切换画布模式与可见的参数选项集。
     connect(m_tools, &QButtonGroup::idClicked, m_canvas, [this](int id) {
         updateToolOptions(id);
         m_canvas->setTool(static_cast<PerspectiveCanvas::Tool>(id));
@@ -234,8 +235,8 @@ void MainWindow::buildUi()
 
 void MainWindow::updateToolOptions(int toolId)
 {
-    // Stamp uses brush geometry but samples color from the source image; only
-    // the paint tool needs a user-selectable foreground color.
+    // 图章工具复用笔刷的几何参数，但颜色取自源图像；只有画笔工具
+    // 需要用户自选前景色。
     const bool isPaintingTool = toolId == PerspectiveCanvas::StampTool ||
                                 toolId == PerspectiveCanvas::BrushTool;
     const bool isBrushTool = toolId == PerspectiveCanvas::BrushTool;
@@ -250,6 +251,7 @@ void MainWindow::updateToolOptions(int toolId)
     m_colorRow->setVisible(isBrushTool);
 }
 
+// 打开颜色对话框，选择画笔颜色并同步更新色块预览
 void MainWindow::chooseColor()
 {
     const QColor color = QColorDialog::getColor(m_canvas->brushColor(), this, tr("选择画笔颜色"));

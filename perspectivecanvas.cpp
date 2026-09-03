@@ -18,24 +18,25 @@
 #include <QtMath>
 
 namespace {
-// Texture resolution is fixed so drawing quality is independent of the source
-// image size and of the current canvas zoom level.
+// 纹理分辨率固定不变，使绘画质量与源图像尺寸及当前画布缩放级别无关。
 constexpr int TextureSize = 1024;
-// Keep history bounded because a snapshot can contain several large textures.
+// 历史快照可能包含多张大纹理，因此限制历史数量以防内存失控。
 constexpr int MaxHistoryStates = 40;
-constexpr qreal Epsilon = 1e-6;
+constexpr qreal Epsilon = 1e-6; // 浮点比较用的极小量
 
+// 把 4 个角点组装为多边形。
 QPolygonF planePolygon(const QPointF corner[4])
 {
-    // The corner order is preserved: callers must provide clockwise or
-    // counter-clockwise points, never a crossed polygon.
+    // 角点顺序保持不变：调用方必须按顺时针或逆时针提供四个点，
+    // 绝不能是交叉的多边形。
     return QPolygonF{corner[0], corner[1], corner[2], corner[3]};
 }
 
+// 手工实现的 source-over 颜色合成（上层 top 叠在下层 bottom 上）。
 QColor over(const QColor &bottom, const QColor &top)
 {
-    // QColor's composition helpers are convenient for QPainter, but this
-    // manual source-over operation is needed for per-pixel texture painting.
+    // QColor 的合成辅助函数便于 QPainter 使用，但逐像素的纹理绘画
+    // 需要这里的手工 source-over 运算。
     const qreal a = top.alphaF();
     const qreal outA = a + bottom.alphaF() * (1.0 - a);
     if (outA < Epsilon)
@@ -49,6 +50,7 @@ QColor over(const QColor &bottom, const QColor &top)
 }
 }
 
+// 构造函数：初始化默认背景并重置历史
 PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
 {
     setMouseTracking(true);
@@ -63,6 +65,7 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
     resetHistory();
 }
 
+// 从文件加载背景图像，并清空平面、浮动图像与历史记录
 bool PerspectiveCanvas::loadImage(const QString &fileName)
 {
     QImage image(fileName);
@@ -87,6 +90,7 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
     return true;
 }
 
+// 将当前场景（背景 + 各平面绘画 + 浮动图像）导出为白底图像文件
 bool PerspectiveCanvas::saveResult(const QString &fileName) const
 {
     QImage result(m_background.size(), QImage::Format_ARGB32);
@@ -97,11 +101,12 @@ bool PerspectiveCanvas::saveResult(const QString &fileName) const
     return result.save(fileName);
 }
 
+// 拖放进入事件：判断拖入内容是否为可用的本地图像文件
 void PerspectiveCanvas::dragEnterEvent(QDragEnterEvent *event)
 {
-    // A dropped image has two meanings: before a document exists it becomes
-    // the background image; afterwards it becomes the movable floating image.
-    // Accept only local image files so arbitrary URLs are not swallowed.
+    // 拖入的图像有两种含义：文档尚未打开时它成为背景图像；
+    // 之后则成为可移动的浮动图像。
+    // 只接受本地图像文件，避免吞掉任意 URL。
     if (!event->mimeData()->hasUrls())
         return;
     for (const QUrl &url : event->mimeData()->urls()) {
@@ -112,13 +117,14 @@ void PerspectiveCanvas::dragEnterEvent(QDragEnterEvent *event)
     }
 }
 
+// 拖放放下事件：打开图像或创建浮动图像
 void PerspectiveCanvas::dropEvent(QDropEvent *event)
 {
     if (!event->mimeData()->hasUrls())
         return;
 
-    // With no document loaded, the first valid dropped file opens the image
-    // directly. loadImage() also resets planes, history and view transform.
+    // 未加载文档时，第一个有效的拖入文件直接作为背景图像打开。
+    // loadImage() 同时会重置平面、历史与视图变换。
     if (!m_hasLoadedImage) {
         for (const QUrl &url : event->mimeData()->urls()) {
             if (!url.isLocalFile() || QImageReader::imageFormat(url.toLocalFile()).isEmpty())
@@ -146,6 +152,7 @@ void PerspectiveCanvas::dropEvent(QDropEvent *event)
     }
 }
 
+// 清除所有平面上的绘画内容（不影响平面几何本身）
 void PerspectiveCanvas::clearPainting()
 {
     if (m_planes.isEmpty())
@@ -157,16 +164,18 @@ void PerspectiveCanvas::clearPainting()
     emit statusMessage(tr("已清除所有平面上的绘画内容"), 3000);
 }
 
+// 捕获当前状态为一份历史快照
 PerspectiveCanvas::CanvasState PerspectiveCanvas::captureState() const
 {
     return CanvasState{m_planes, m_selectedPlane, m_pastedImage, m_pastedImagePosition,
                        m_pastedImageAttached, m_pastedSurfaceGroup, m_pastedHostPlane};
 }
 
+// 把剪贴板中的图像粘贴为新的浮动图像
 void PerspectiveCanvas::pasteClipboardImage()
 {
-    // QClipboard performs the platform-specific conversion from common image
-    // formats (PNG, BMP, etc.) to QImage.
+    // QClipboard 会完成从常见图像格式（PNG、BMP 等）到 QImage 的
+    // 平台相关转换。
     const QClipboard *clipboard = QApplication::clipboard();
     const QImage image = clipboard ? clipboard->image() : QImage();
     if (image.isNull()) {
@@ -181,6 +190,7 @@ void PerspectiveCanvas::pasteClipboardImage()
     setFloatingImage(image, tr("图像已粘贴到画布左上角"));
 }
 
+// 设置新的浮动图像：放到画布左上角并重置其吸附状态
 void PerspectiveCanvas::setFloatingImage(const QImage &image, const QString &statusText)
 {
     m_pastedImage = image.convertToFormat(QImage::Format_ARGB32);
@@ -193,14 +203,15 @@ void PerspectiveCanvas::setFloatingImage(const QImage &image, const QString &sta
     emit statusMessage(statusText, 3000);
 }
 
+// 将浮动图像顺时针旋转 90°
 void PerspectiveCanvas::rotateFloatingImage()
 {
     if (m_pastedImage.isNull()) {
         emit statusMessage(tr("请先粘贴或拖入一张浮动图像"), 2500);
         return;
     }
-    // Rotate the bitmap itself, preserving its current top-left position in
-    // either canvas coordinates or the shared unfolded surface coordinates.
+    // 直接旋转位图本身，保持其左上角位置不变（无论该位置处于
+    // 画布坐标还是共享展开曲面坐标系中）。
     m_pastedImage = m_pastedImage.transformed(QTransform().rotate(90),
                                                Qt::SmoothTransformation);
     commitHistory();
@@ -208,6 +219,7 @@ void PerspectiveCanvas::rotateFloatingImage()
     emit statusMessage(tr("浮动图像已顺时针旋转 90°"), 2200);
 }
 
+// 将浮动图像水平翻转
 void PerspectiveCanvas::flipFloatingImageHorizontal()
 {
     if (m_pastedImage.isNull()) {
@@ -220,6 +232,7 @@ void PerspectiveCanvas::flipFloatingImageHorizontal()
     emit statusMessage(tr("浮动图像已水平翻转"), 2200);
 }
 
+// 将浮动图像垂直翻转
 void PerspectiveCanvas::flipFloatingImageVertical()
 {
     if (m_pastedImage.isNull()) {
@@ -232,6 +245,7 @@ void PerspectiveCanvas::flipFloatingImageVertical()
     emit statusMessage(tr("浮动图像已垂直翻转"), 2200);
 }
 
+// 恢复到指定的历史快照，并清空一切进行中的交互状态
 void PerspectiveCanvas::restoreState(const CanvasState &state)
 {
     m_planes = state.planes;
@@ -249,6 +263,7 @@ void PerspectiveCanvas::restoreState(const CanvasState &state)
     update();
 }
 
+// 清空历史并以当前状态作为初始快照（用于加载新文档）
 void PerspectiveCanvas::resetHistory()
 {
     m_history.clear();
@@ -259,6 +274,7 @@ void PerspectiveCanvas::resetHistory()
     emit canRedoChanged(false);
 }
 
+// 提交一次状态变更：丢弃旧的重做分支，追加新快照并裁剪历史长度
 void PerspectiveCanvas::commitHistory()
 {
     while (m_history.size() > m_historyIndex + 1)
@@ -274,6 +290,7 @@ void PerspectiveCanvas::commitHistory()
     emit canRedoChanged(false);
 }
 
+// 撤销：回退到上一份快照
 void PerspectiveCanvas::undo()
 {
     if (m_historyIndex <= 0)
@@ -284,6 +301,7 @@ void PerspectiveCanvas::undo()
     emit statusMessage(tr("已撤销"), 1800);
 }
 
+// 重做：前进到下一份快照
 void PerspectiveCanvas::redo()
 {
     if (m_historyIndex + 1 >= m_history.size())
@@ -294,6 +312,7 @@ void PerspectiveCanvas::redo()
     emit statusMessage(tr("已重做"), 1800);
 }
 
+// 切换当前工具，并清理进行中的交互状态、更新光标与提示
 void PerspectiveCanvas::setTool(Tool tool)
 {
     m_tool = tool;
@@ -311,6 +330,7 @@ void PerspectiveCanvas::setTool(Tool tool)
     update();
 }
 
+// 根据控件尺寸计算“适应窗口”的缩放比例与居中偏移
 void PerspectiveCanvas::updateViewTransform()
 {
     if (m_background.isNull())
@@ -324,21 +344,25 @@ void PerspectiveCanvas::updateViewTransform()
     m_offset = QPointF((width() - shown.width()) / 2.0, (height() - shown.height()) / 2.0);
 }
 
+// 控件坐标 -> 原始图像坐标
 QPointF PerspectiveCanvas::toImage(const QPointF &point) const
 {
     return (point - m_offset) / m_scale;
 }
 
+// 原始图像坐标 -> 控件坐标
 QPointF PerspectiveCanvas::toWidget(const QPointF &point) const
 {
     return point * m_scale + m_offset;
 }
 
+// 尺寸变化时重新计算视图变换
 void PerspectiveCanvas::resizeEvent(QResizeEvent *)
 {
     updateViewTransform();
 }
 
+// 绘制整个画布：设置抗锯齿与平滑缩放，按视图变换渲染场景
 void PerspectiveCanvas::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
@@ -349,10 +373,11 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
     renderScene(painter, true);
 }
 
+// 渲染完整场景。showGuides 为 true 时额外绘制编辑辅助元素。
 void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
 {
-    // The canvas background is part of the document output and is always
-    // rendered. The showGuides flag controls only editor overlays below.
+    // 画布背景属于文档输出的一部分，总是被渲染。showGuides 标志
+    // 只控制下方这些编辑器叠加层的绘制。
     painter.drawImage(QPointF(0, 0), m_background);
     if (showGuides && !m_hasLoadedImage && m_planes.isEmpty() && m_creationPoints.isEmpty()) {
         painter.save();
@@ -364,8 +389,8 @@ void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
                          tr("请打开一张图片开始操作"));
         painter.restore();
     }
-    // Draw each plane's paint layer first. The clipboard image remains a
-    // top-level, directly movable layer until it is explicitly removed.
+    // 先绘制每个平面的绘画层。剪贴板图像在被显式移除之前，
+    // 始终作为一个可直接移动的顶层图层存在。
     for (const Plane &plane : m_planes) {
         renderProjectedImage(painter, plane, plane.paint);
     }
@@ -390,6 +415,7 @@ void PerspectiveCanvas::renderScene(QPainter &painter, bool showGuides) const
     painter.restore();
 }
 
+// 用单应变换把纹理投影到平面的四边形上
 void PerspectiveCanvas::renderProjectedImage(QPainter &painter, const Plane &plane,
                                                const QImage &texture) const
 {
@@ -397,8 +423,8 @@ void PerspectiveCanvas::renderProjectedImage(QPainter &painter, const Plane &pla
         return;
     const QPolygonF source{QPointF(0, 0), QPointF(texture.width(), 0),
                            QPointF(texture.width(), texture.height()), QPointF(0, texture.height())};
-    // quadToQuad() produces the homography that gives every texture pixel its
-    // correct perspective position on the four-point plane.
+    // quadToQuad() 生成所需的单应变换，使纹理的每个像素都落在四点
+    // 平面上正确的透视位置。
     QTransform projection;
     if (!QTransform::quadToQuad(source, planePolygon(plane.corner), projection))
         return;
@@ -409,6 +435,7 @@ void PerspectiveCanvas::renderProjectedImage(QPainter &painter, const Plane &pla
     painter.restore();
 }
 
+// 归一化 UV 坐标 -> 平面上的图像坐标
 QPointF PerspectiveCanvas::uvToPlane(const Plane &plane, const QPointF &uv) const
 {
     const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
@@ -418,6 +445,7 @@ QPointF PerspectiveCanvas::uvToPlane(const Plane &plane, const QPointF &uv) cons
     return transform.map(uv);
 }
 
+// 平面上的图像坐标 -> 归一化 UV 坐标（ok 返回变换是否有效）
 QPointF PerspectiveCanvas::planeToUv(const Plane &plane, const QPointF &point, bool *ok) const
 {
     QTransform transform;
@@ -428,6 +456,7 @@ QPointF PerspectiveCanvas::planeToUv(const Plane &plane, const QPointF &point, b
     return valid ? transform.map(point) : QPointF();
 }
 
+// 平面上的图像坐标 -> 该平面所属分组的共享展开曲面坐标
 QPointF PerspectiveCanvas::planeToSurface(const Plane &plane, const QPointF &point,
                                            bool *ok) const
 {
@@ -439,6 +468,8 @@ QPointF PerspectiveCanvas::planeToSurface(const Plane &plane, const QPointF &poi
     return valid ? transform.map(point) : QPointF();
 }
 
+// 渲染浮动图像：未吸附时直接绘制；已吸附时按宿主平面及相邻面的
+// 单应变换分段投影，使图像可以跨越共享接缝。
 void PerspectiveCanvas::renderPastedImage(QPainter &painter) const
 {
     if (m_pastedImage.isNull())
@@ -481,9 +512,8 @@ void PerspectiveCanvas::renderPastedImage(QPainter &painter) const
         return path;
     };
 
-    // Pixels belonging to another face are removed from the host projection,
-    // then redrawn with that face's homography. This avoids a doubled image at
-    // the seam while allowing the image to extend beyond the finite grid.
+    // 先从宿主投影中减去属于其他面的像素，再用那个面的单应变换重绘。
+    // 这样接缝处不会出现重影，同时图像仍可延伸到有限网格之外。
     for (int i = 0; i < m_planes.size(); ++i) {
         if (i == host || m_planes[i].surfaceGroup != m_pastedSurfaceGroup)
             continue;
@@ -499,8 +529,8 @@ void PerspectiveCanvas::renderPastedImage(QPainter &painter) const
         painter.save();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         painter.setWorldTransform(projection, true);
-        // The clip is expressed in source-image coordinates, so install the
-        // image-to-canvas transform before giving the path to QPainter.
+        // 裁剪路径表达在源图像坐标系中，因此要先把图像到画布的变换
+        // 安装到 QPainter，再传入该路径。
         painter.setClipPath(clip, Qt::IntersectClip);
         painter.drawImage(QPointF(0, 0), m_pastedImage);
         painter.restore();
@@ -514,6 +544,8 @@ void PerspectiveCanvas::renderPastedImage(QPainter &painter) const
     }
 }
 
+// 命中测试：判断某个画布坐标是否落在浮动图像上。
+// 已吸附时可返回该点在浮动图像内的局部坐标及其所在平面索引。
 bool PerspectiveCanvas::pastedImageAt(const QPointF &canvasPoint, QPointF *imagePoint,
                                        int *planeIndex) const
 {
@@ -531,8 +563,7 @@ bool PerspectiveCanvas::pastedImageAt(const QPointF &canvasPoint, QPointF *image
         return true;
     }
 
-    // Prefer the actual face under the pointer so shared edges use the face
-    // currently visible on top.
+    // 优先选择指针实际所在的面，这样共享边将归属当前显示在顶部的面。
     for (int i = m_planes.size() - 1; i >= 0; --i) {
         const Plane &plane = m_planes[i];
         if (plane.surfaceGroup != m_pastedSurfaceGroup ||
@@ -550,8 +581,8 @@ bool PerspectiveCanvas::pastedImageAt(const QPointF &canvasPoint, QPointF *image
         }
     }
 
-    // The host projection deliberately continues outside its finite grid, so
-    // its visible extension must remain draggable too.
+    // 宿主投影有意延伸到其有限网格之外，因此其可见的延伸部分
+    // 也必须保持可拖动。
     if (m_pastedHostPlane >= 0 && m_pastedHostPlane < m_planes.size()) {
         bool ok = false;
         const QPointF local = planeToSurface(m_planes[m_pastedHostPlane], canvasPoint, &ok) -
@@ -567,6 +598,7 @@ bool PerspectiveCanvas::pastedImageAt(const QPointF &canvasPoint, QPointF *image
     return false;
 }
 
+// 返回平面的 8 个控制点：4 个角点在前，4 个边中点在后
 QVector<QPointF> PerspectiveCanvas::handles(const Plane &plane) const
 {
     return {plane.corner[0], plane.corner[1], plane.corner[2], plane.corner[3],
@@ -576,6 +608,7 @@ QVector<QPointF> PerspectiveCanvas::handles(const Plane &plane) const
             (plane.corner[3] + plane.corner[0]) / 2.0};
 }
 
+// 命中测试：返回距离点最近的控制点索引（考虑视图缩放后的拾取半径）
 int PerspectiveCanvas::handleAt(const Plane &plane, const QPointF &point) const
 {
     const QVector<QPointF> hs = handles(plane);
@@ -587,6 +620,7 @@ int PerspectiveCanvas::handleAt(const Plane &plane, const QPointF &point) const
     return -1;
 }
 
+// 计算点 p 到线段 ab 的距离；t 返回最近点在线段上的参数化位置（0~1）
 qreal PerspectiveCanvas::distanceToSegment(const QPointF &p, const QPointF &a,
                                             const QPointF &b, qreal *t)
 {
@@ -599,11 +633,13 @@ qreal PerspectiveCanvas::distanceToSegment(const QPointF &p, const QPointF &a,
     return QLineF(p, a + d * amount).length();
 }
 
+// 校验平面是否为可用的单应变换目标：必须是非交叉的凸四边形，
+// 且不能过于退化（边过短、面积过小或分母过零）。
 bool PerspectiveCanvas::isValidPlane(const Plane &plane)
 {
-    // A projective transform maps the unit square to a simple convex quad.
-    // Reject concave, self-intersecting and nearly singular configurations before
-    // they reach quadToQuad(), otherwise its pole can pass through the plane.
+    // 射影变换把单位正方形映射为简单的凸四边形。
+    // 必须在进入 quadToQuad() 之前拒绝凹形、自交叉和近乎退化的
+    // 配置，否则变换的极点可能穿过平面。
     qreal windingSign = 0.0;
     qreal twiceArea = 0.0;
     for (int i = 0; i < 4; ++i) {
@@ -632,8 +668,8 @@ bool PerspectiveCanvas::isValidPlane(const Plane &plane)
     if (!QTransform::quadToQuad(unit, planePolygon(plane.corner), transform))
         return false;
 
-    // The homogeneous denominator must keep one sign over the complete unit
-    // square. Since it is linear in u/v, checking all corners is sufficient.
+    // 齐次分母必须在完整的单位正方形上保持同一符号。
+    // 由于它对 u/v 是线性的，只需检查四个角即可。
     qreal denominatorSign = 0.0;
     for (const QPointF &uv : unit) {
         const qreal w = transform.m13() * uv.x() + transform.m23() * uv.y() + transform.m33();
@@ -648,6 +684,7 @@ bool PerspectiveCanvas::isValidPlane(const Plane &plane)
     return true;
 }
 
+// 命中测试：返回点靠近的边缘索引（0~3），无命中返回 -1
 int PerspectiveCanvas::edgeAt(const Plane &plane, const QPointF &point) const
 {
     const qreal tolerance = 9.0 / m_scale;
@@ -658,6 +695,7 @@ int PerspectiveCanvas::edgeAt(const Plane &plane, const QPointF &point) const
     return -1;
 }
 
+// 命中测试：返回点所在的最上层平面索引（后创建的优先），无命中返回 -1
 int PerspectiveCanvas::planeAt(const QPointF &point) const
 {
     for (int i = m_planes.size() - 1; i >= 0; --i) {
@@ -667,6 +705,8 @@ int PerspectiveCanvas::planeAt(const QPointF &point) const
     return -1;
 }
 
+// 绘制平面的编辑辅助元素：外框、内部网格，以及选中且处于编辑
+// 工具时的控制点方块。
 void PerspectiveCanvas::drawPlaneGuides(QPainter &painter, const Plane &plane, bool selected) const
 {
     painter.save();
@@ -703,6 +743,7 @@ void PerspectiveCanvas::drawPlaneGuides(QPainter &painter, const Plane &plane, b
     painter.restore();
 }
 
+// 鼠标按下事件：按当前工具分派（拖动浮动图像/创建平面/编辑平面/落笔）
 void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton)
@@ -839,6 +880,7 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     update();
 }
 
+// 鼠标移动事件：处理拖动浮动图像、编辑平面、绘制笔迹，或更新悬停光标
 void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
@@ -920,6 +962,7 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
         updateHoverCursor(point);
 }
 
+// 根据悬停位置更新鼠标光标形状（抓手/十字/方向缩放等）
 void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
 {
     if (pastedImageAt(imagePoint)) {
@@ -967,6 +1010,7 @@ void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
         setCursor(Qt::ArrowCursor);
 }
 
+// 鼠标释放事件：结束交互，如有变更则提交历史记录
 void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton)
@@ -995,6 +1039,7 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
     update();
 }
 
+// 沿某条边方向缩放平面：只改变该边到对边的距离，保持透视关系不变
 PerspectiveCanvas::Plane PerspectiveCanvas::resizePlaneAlongEdge(const Plane &source, int edge,
                                                                   const QPointF &dragPoint) const
 {
@@ -1009,8 +1054,8 @@ PerspectiveCanvas::Plane PerspectiveCanvas::resizePlaneAlongEdge(const Plane &so
     const QPointF edgeMidpoint = (a + b) / 2.0;
     const QPointF oppositeMidpoint = (oppositeA + oppositeB) / 2.0;
 
-    // An edge resize has one degree of freedom. Ignore sideways pointer motion
-    // and retain only movement along the plane's existing extension axis.
+    // 沿边缩放只有一个自由度。忽略指针的侧向移动，
+    // 只保留沿平面既有延伸轴方向的位移量。
     QPointF extensionAxis = edgeMidpoint - oppositeMidpoint;
     qreal axisLength = QLineF(QPointF(), extensionAxis).length();
     if (axisLength < Epsilon) {
@@ -1023,7 +1068,7 @@ PerspectiveCanvas::Plane PerspectiveCanvas::resizePlaneAlongEdge(const Plane &so
     const qreal extension = QPointF::dotProduct(dragPoint - m_pressImagePoint, extensionAxis);
     const QPointF targetPoint = edgeMidpoint + extensionAxis * extension;
 
-    // The resized edge must retain the original edge-direction vanishing point.
+    // 缩放后的边必须保留原边方向的消失点。
     QPointF edgeVanishingPoint;
     const auto vpType = QLineF(a, b).intersects(QLineF(oppositeA, oppositeB),
                                                 &edgeVanishingPoint);
@@ -1034,12 +1079,12 @@ PerspectiveCanvas::Plane PerspectiveCanvas::resizePlaneAlongEdge(const Plane &so
         QLineF(edgeVanishingPoint, edgeMidpoint).length() < 1e7) {
         resizedEdge = QLineF(edgeVanishingPoint, targetPoint);
     } else {
-        // Parallel edges are the limiting case with a vanishing point at infinity.
+        // 对边平行是消失点位于无穷远处的极限情形。
         resizedEdge = QLineF(targetPoint, targetPoint + (b - a));
     }
 
-    // Each endpoint is constrained to its existing side line. This is what
-    // keeps a vertical plane vertical while only changing its height.
+    // 每个端点都被约束在它原来所在的侧边线上。
+    // 这正是保证“垂直平面在缩放时只改变高度、仍然保持垂直”的原因。
     QPointF movedA;
     QPointF movedB;
     const auto aType = QLineF(a, source.corner[previous]).intersects(resizedEdge, &movedA);
@@ -1054,11 +1099,13 @@ PerspectiveCanvas::Plane PerspectiveCanvas::resizePlaneAlongEdge(const Plane &so
     return result;
 }
 
+// 恢复源平面法线在图像上的投影方向（即第三个消失方向）。
+// 该方向被所有垂直于源平面的平面共享。
 bool PerspectiveCanvas::perpendicularDirection(const Plane &source, const QPointF &atPoint,
                                                 QPointF *direction) const
 {
-    // Recover the two vanishing points of the source plane in homogeneous
-    // image coordinates. Homogeneous form also covers parallel line families.
+    // 在齐次图像坐标下恢复源平面的两个消失点。
+    // 齐次形式同时也能覆盖平行线族（消失点在无穷远）的情形。
     auto imagePoint = [](const QPointF &p) {
         return QVector3D(float(p.x()), float(p.y()), 1.0f);
     };
@@ -1080,8 +1127,8 @@ bool PerspectiveCanvas::perpendicularDirection(const Plane &source, const QPoint
     const qreal imageExtent = qMax(m_background.width(), m_background.height());
     qreal focalLength = imageExtent * 1.2;
 
-    // When both vanishing points are finite and the two grid axes represent
-    // orthogonal world directions, their orthogonality determines focal length.
+    // 当两个消失点均为有限值、且两条网格轴代表相互正交的世界方向时，
+    // 可由正交性解出焦距。
     if (qAbs(vanishingX.z()) > 1e-6 && qAbs(vanishingY.z()) > 1e-6) {
         const QPointF vx(vanishingX.x() / vanishingX.z(),
                          vanishingX.y() / vanishingX.z());
@@ -1108,8 +1155,8 @@ bool PerspectiveCanvas::perpendicularDirection(const Plane &source, const QPoint
         return false;
     normal.normalize();
 
-    // Project the 3D normal through K. This is the third vanishing point shared
-    // by every plane perpendicular to the source plane.
+    // 把 3D 法线经内参矩阵 K 投影回图像。这就是与源平面垂直的所有
+    // 平面共享的第三个消失点。
     const qreal projectedX = focalLength * normal.x() + cx * normal.z();
     const qreal projectedY = focalLength * normal.y() + cy * normal.z();
     QPointF projectedDirection;
@@ -1118,7 +1165,7 @@ bool PerspectiveCanvas::perpendicularDirection(const Plane &source, const QPoint
                                                   projectedY / normal.z());
         projectedDirection = perpendicularVanishingPoint - atPoint;
     } else {
-        // A zero homogeneous w means the third vanishing point is at infinity.
+        // 齐次分量 w 为零意味着第三个消失点位于无穷远处。
         projectedDirection = QPointF(projectedX, projectedY);
     }
 
@@ -1129,6 +1176,7 @@ bool PerspectiveCanvas::perpendicularDirection(const Plane &source, const QPoint
     return true;
 }
 
+// 从源平面的一条边拖出与之垂直的新平面（Ctrl+拖动边缘）
 PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &source, int edge,
                                                                     const QPointF &dragPoint) const
 {
@@ -1145,8 +1193,8 @@ PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &
     if (!perpendicularDirection(source, midpoint, &perpendicularAtMidpoint))
         return result;
 
-    // The pointer controls only the signed distance along the projected 3D
-    // normal. Sideways motion cannot alter the perpendicular plane's angle.
+    // 指针只控制沿投影后 3D 法线方向的有符号距离。
+    // 侧向移动无法改变垂直平面的角度。
     const qreal amount = QPointF::dotProduct(dragPoint - m_pressImagePoint,
                                              perpendicularAtMidpoint);
     const QPointF targetMidpoint = midpoint + perpendicularAtMidpoint * amount;
@@ -1159,8 +1207,8 @@ PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &
         return result;
     }
 
-    // The shared edge and the new outer edge represent the same direction in
-    // 3D, so both meet at the original edge family's vanishing point.
+    // 共享边与新的外侧边在 3D 中代表同一方向，
+    // 因此二者相交于原边线族的消失点。
     const QPointF oppositeA = source.corner[(edge + 2) % 4];
     const QPointF oppositeB = source.corner[(edge + 3) % 4];
     QPointF edgeVanishingPoint;
@@ -1192,9 +1240,8 @@ PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &
         }
     }
 
-    // Parallel source edges have their vanishing point at infinity, so the
-    // outer edge remains parallel while its endpoints still follow the third
-    // (perpendicular) vanishing direction.
+    // 源平面的边相互平行时其消失点在无穷远处，因此外侧边保持平行，
+    // 但其端点仍沿第三个（垂直）消失方向移动。
     if (!constructedWithVanishingPoint) {
         const QLineF outerLine(targetMidpoint, targetMidpoint + (b - a));
         QPointF perpendicularAtA;
@@ -1215,9 +1262,8 @@ PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &
         }
     }
 
-    // Unfold the perpendicular face around the shared edge. Both faces retain
-    // identical surface coordinates on the seam, while the new outer edge is
-    // placed on the side opposite the source face's interior.
+    // 把垂直面绕共享边展开到曲面上。两个面在接缝处保持完全相同的
+    // 曲面坐标，而新的外侧边被放置在源面内部的另一侧。
     const QPointF surfaceA = result.surfaceCorner[0];
     const QPointF surfaceB = result.surfaceCorner[1];
     const QPointF surfaceEdge = surfaceB - surfaceA;
@@ -1242,6 +1288,7 @@ PerspectiveCanvas::Plane PerspectiveCanvas::makePerpendicularPlane(const Plane &
     return result;
 }
 
+// 从上一个 UV 位置向当前位置插值补间，沿笔迹均匀落下一串笔触点
 void PerspectiveCanvas::drawStrokeTo(const QPointF &point, bool stamp)
 {
     if (m_selectedPlane < 0 || m_selectedPlane >= m_planes.size())
@@ -1263,10 +1310,12 @@ void PerspectiveCanvas::drawStrokeTo(const QPointF &point, bool stamp)
     m_lastImagePoint = point;
 }
 
+// 在平面的纹理空间落下一个笔触点（画笔或仿制图章）。
+// stamp 为 true 时按仿制偏移从源位置采样颜色。
 void PerspectiveCanvas::applyDab(Plane &plane, const QPointF &uv, bool stamp)
 {
-    // Brush size is converted from image pixels to the plane's normalized
-    // texture so a dab keeps a consistent apparent size under perspective.
+    // 笔刷尺寸从图像像素换算到平面的归一化纹理，使一个笔触点在
+    // 透视作用下保持视觉上的一致大小。
     const qreal planeWidth = (QLineF(plane.corner[0], plane.corner[1]).length() +
                               QLineF(plane.corner[3], plane.corner[2]).length()) / 2.0;
     const qreal radius = qBound(1.0, m_diameter * TextureSize /
@@ -1312,6 +1361,7 @@ void PerspectiveCanvas::applyDab(Plane &plane, const QPointF &uv, bool stamp)
     }
 }
 
+// 键盘事件：Ctrl+V 粘贴图像、Esc 取消当前操作、Delete 删除选中平面
 void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
 {
     if (event->matches(QKeySequence::Paste)) {
@@ -1357,6 +1407,7 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
     }
 }
 
+// Tab / Shift+Tab：在平面之间循环切换选中（仅编辑平面工具）
 bool PerspectiveCanvas::focusNextPrevChild(bool next)
 {
     if (m_tool != EditPlane || m_planes.isEmpty())
