@@ -36,10 +36,10 @@ void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
     }
     // 先绘制每个平面的绘画层。剪贴板图像在被显式移除之前，
     // 始终作为一个可直接移动的顶层图层存在。
-    for (const Plane &plane : m_doc.planes()) {
+    for (const Plane &plane : m_doc.planes())
         renderProjectedImage(painter, plane, plane.paint);
-    }
-    renderPastedImage(painter);
+    for (const auto &item : m_doc.pastedImages())
+        renderPastedImage(painter, item);
 
     if (!showGuides)
         return;
@@ -83,33 +83,33 @@ void SceneRenderer::renderProjectedImage(QPainter &painter, const Plane &plane,
 
 // 渲染浮动图像：未吸附时直接绘制；已吸附时按宿主平面及相邻面的
 // 单应变换分段投影，使图像可以跨越共享接缝。
-void SceneRenderer::renderPastedImage(QPainter &painter) const
+void SceneRenderer::renderPastedImage(QPainter &painter, const CanvasDocument::PastedImage &item) const
 {
-    const QImage &pastedImage = m_doc.pastedImage();
+    const QImage &pastedImage = item.image;
     if (pastedImage.isNull())
         return;
-    if (!m_doc.pastedImageAttached()) {
-        painter.drawImage(m_doc.pastedImagePosition(), pastedImage);
+    if (!item.attached) {
+        painter.drawImage(item.position, pastedImage);
         return;
     }
 
-    int host = m_doc.pastedHostPlane();
+    int host = item.hostPlane;
     if (host < 0 || host >= m_doc.planes().size() ||
-        m_doc.planes()[host].surfaceGroup != m_doc.pastedSurfaceGroup()) {
+        m_doc.planes()[host].surfaceGroup != item.surfaceGroup) {
         host = -1;
         for (int i = 0; i < m_doc.planes().size(); ++i) {
-            if (m_doc.planes()[i].surfaceGroup == m_doc.pastedSurfaceGroup()) {
+            if (m_doc.planes()[i].surfaceGroup == item.surfaceGroup) {
                 host = i;
                 break;
             }
         }
     }
     if (host < 0) {
-        painter.drawImage(m_doc.pastedImagePosition(), pastedImage);
+        painter.drawImage(item.position, pastedImage);
         return;
     }
 
-    const QPointF &imagePosition = m_doc.pastedImagePosition();
+    const QPointF &imagePosition = item.position;
     const QRectF imageRect(QPointF(0, 0), QSizeF(pastedImage.size()));
     QPainterPath hostClip;
     hostClip.addRect(imageRect);
@@ -130,7 +130,7 @@ void SceneRenderer::renderPastedImage(QPainter &painter) const
     // 先从宿主投影中减去属于其他面的像素，再用那个面的单应变换重绘。
     // 这样接缝处不会出现重影，同时图像仍可延伸到有限网格之外。
     for (int i = 0; i < m_doc.planes().size(); ++i) {
-        if (i == host || m_doc.planes()[i].surfaceGroup != m_doc.pastedSurfaceGroup())
+        if (i == host || m_doc.planes()[i].surfaceGroup != item.surfaceGroup)
             continue;
         hostClip = hostClip.subtracted(polygonPath(sourcePolygon(m_doc.planes()[i])));
     }
@@ -153,7 +153,7 @@ void SceneRenderer::renderPastedImage(QPainter &painter) const
 
     drawFace(m_doc.planes()[host], hostClip);
     for (int i = 0; i < m_doc.planes().size(); ++i) {
-        if (i == host || m_doc.planes()[i].surfaceGroup != m_doc.pastedSurfaceGroup())
+        if (i == host || m_doc.planes()[i].surfaceGroup != item.surfaceGroup)
             continue;
         drawFace(m_doc.planes()[i], polygonPath(sourcePolygon(m_doc.planes()[i])));
     }

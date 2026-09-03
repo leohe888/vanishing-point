@@ -14,7 +14,7 @@ struct Plane {
     // 跨越接缝，而每个面仍使用各自到画布的单应变换。
     QPointF surfaceCorner[4];
     int surfaceGroup = -1;  // 所属的展开曲面分组（共享曲面的相邻平面同组）
-    QImage paint;           // 该平面的绘画纹理（UV 空间）
+    QImage paint;           // 兼容旧绘制引擎，迁移完成前不参与规则所有权
     QString name;           // 显示用的平面名称
 };
 

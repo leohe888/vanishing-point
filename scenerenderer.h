@@ -1,11 +1,11 @@
 #pragma once
 
 #include "planemath.h"
+#include "canvasdocument.h"
 
 #include <QVector>
 
 class QPainter;
-class CanvasDocument;
 
 // 场景渲染器：把文档内容绘制到 QPainter。
 // 既用于屏幕显示（带编辑辅助层：网格、控制点、创建角点预览），
@@ -31,7 +31,7 @@ private:
                               const QImage &texture) const;
     // 渲染浮动图像：未吸附时直接绘制；已吸附时按宿主平面及相邻面的
     // 单应变换分段投影，使图像可以跨越共享接缝。
-    void renderPastedImage(QPainter &painter) const;
+    void renderPastedImage(QPainter &painter, const CanvasDocument::PastedImage &item) const;
     // 绘制平面的编辑辅助元素：外框、内部网格，以及选中且处于编辑
     // 工具时的控制点方块。
     void drawPlaneGuides(QPainter &painter, const Plane &plane, bool selected,

@@ -16,16 +16,16 @@ class CanvasDocument : public QObject
 public:
     explicit CanvasDocument(QObject *parent = nullptr);
 
+    struct PastedImage { QImage image; QPointF position; bool attached = false; int surfaceGroup = -1; int hostPlane = -1; };
+
     // 历史快照有意使用 Qt 的隐式共享 QImage，因此未被后续编辑修改的
     // 图层不会真正被复制。
     struct CanvasState {
         QVector<Plane> planes;              // 全部平面
         int selectedPlane = -1;             // 当前选中的平面索引
-        QImage pastedImage;                 // 浮动图像位图
-        QPointF pastedImagePosition;        // 浮动图像位置（画布或曲面坐标）
-        bool pastedImageAttached = false;   // 浮动图像是否已吸附到某个曲面
-        int pastedSurfaceGroup = -1;        // 浮动图像吸附到的曲面分组
-        int pastedHostPlane = -1;           // 浮动图像的宿主平面索引
+        QImage paintLayer;
+        QVector<PastedImage> pastedImages;
+        int activePastedImage = -1;
     };
 
     // —— 背景（即“文档”） ——
@@ -44,21 +44,23 @@ public:
     void removePlane(int index);                   // 删除平面并修正浮动图像宿主索引
 
     // —— 浮动图像 ——
-    void setFloatingImage(const QImage &image);    // 放到画布左上角并重置吸附状态
+    void setFloatingImage(const QImage &image);    // 追加一张位于左上角的浮动图像
     bool rotateFloatingImage();                    // 顺时针旋转 90°，返回是否成功
     bool flipFloatingImage(bool horizontal, bool vertical); // 翻转，返回是否成功
-    const QImage &pastedImage() const { return m_pastedImage; }
-    bool hasFloatingImage() const { return !m_pastedImage.isNull(); }
-    QPointF pastedImagePosition() const { return m_pastedImagePosition; }
-    bool pastedImageAttached() const { return m_pastedImageAttached; }
-    int pastedSurfaceGroup() const { return m_pastedSurfaceGroup; }
-    int pastedHostPlane() const { return m_pastedHostPlane; }
+    const QImage &pastedImage() const;
+    bool hasFloatingImage() const { return m_activePastedImage >= 0 && m_activePastedImage < m_pastedImages.size(); }
+    QPointF pastedImagePosition() const;
+    bool pastedImageAttached() const;
+    int pastedSurfaceGroup() const;
+    int pastedHostPlane() const;
+    const QVector<PastedImage> &pastedImages() const { return m_pastedImages; }
+    QImage &paintLayer() { return m_paintLayer; }
+    const QImage &paintLayer() const { return m_paintLayer; }
     // 一次性更新浮动图像的完整放置状态（位置 + 吸附信息）。
     // 在吸附之前 position 处于画布空间；吸附之后处于宿主分组共享的
     // 展开曲面坐标系中。
-    void setFloatingImagePlacement(const QPointF &position, bool attached,
-                                   int surfaceGroup, int hostPlane);
     void setPastedImagePosition(const QPointF &position); // 已吸附状态下仅移动位置
+    void setFloatingImagePlacement(const QPointF &position, bool attached, int surfaceGroup, int hostPlane);
 
     // —— 历史 ——
     bool undo();                                   // 回退到上一份快照，返回是否发生了撤销
@@ -81,11 +83,9 @@ private:
     bool m_hasLoadedImage = false;      // 是否已加载背景图像
     QVector<Plane> m_planes;            // 全部透视平面
     int m_selectedPlane = -1;           // 当前选中的平面索引
-    QImage m_pastedImage;               // 浮动图像位图
-    QPointF m_pastedImagePosition;      // 浮动图像位置（画布或曲面坐标）
-    bool m_pastedImageAttached = false; // 浮动图像是否已吸附到某个曲面
-    int m_pastedSurfaceGroup = -1;      // 浮动图像吸附到的曲面分组
-    int m_pastedHostPlane = -1;         // 浮动图像的宿主平面索引
+    QImage m_paintLayer;
+    QVector<PastedImage> m_pastedImages;
+    int m_activePastedImage = -1;
     // m_historyIndex 指向当前可见的快照。撤销之后的新的编辑会丢弃旧的
     // 重做分支，与主流编辑器的行为一致。
     QVector<CanvasState> m_history;     // 历史快照栈

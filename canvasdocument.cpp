@@ -23,11 +23,10 @@ bool CanvasDocument::loadImage(const QString &fileName)
     m_hasLoadedImage = true;
     emit documentAvailabilityChanged(true);
     m_planes.clear();
-    m_pastedImage = QImage();
-    m_pastedImagePosition = QPointF();
-    m_pastedImageAttached = false;
-    m_pastedSurfaceGroup = -1;
-    m_pastedHostPlane = -1;
+    m_paintLayer = QImage(m_background.size(), QImage::Format_ARGB32_Premultiplied);
+    m_paintLayer.fill(Qt::transparent);
+    m_pastedImages.clear();
+    m_activePastedImage = -1;
     m_selectedPlane = -1;
     resetHistory();
     return true;
@@ -37,6 +36,8 @@ bool CanvasDocument::loadImage(const QString &fileName)
 void CanvasDocument::setBackground(const QImage &image)
 {
     m_background = image.convertToFormat(QImage::Format_ARGB32);
+    m_paintLayer = QImage(m_background.size(), QImage::Format_ARGB32_Premultiplied);
+    m_paintLayer.fill(Qt::transparent);
 }
 
 // 分配一个新的展开曲面分组号（比现有最大分组号大 1）
@@ -51,8 +52,8 @@ int CanvasDocument::nextSurfaceGroupId() const
 // 清除所有平面上的绘画内容（不影响平面几何本身）
 void CanvasDocument::clearPainting()
 {
-    for (Plane &plane : m_planes)
-        plane.paint.fill(Qt::transparent);
+    if (m_paintLayer.isNull()) return;
+    m_paintLayer.fill(Qt::transparent);
     commitHistory();
 }
 
@@ -64,20 +65,22 @@ void CanvasDocument::removePlane(int removedPlane)
     if (removedPlane < 0 || removedPlane >= m_planes.size())
         return;
     m_planes.removeAt(removedPlane);
-    if (m_pastedHostPlane > removedPlane) {
-        --m_pastedHostPlane;
-    } else if (m_pastedHostPlane == removedPlane) {
-        m_pastedHostPlane = -1;
-        for (int i = 0; i < m_planes.size(); ++i) {
-            if (m_planes[i].surfaceGroup == m_pastedSurfaceGroup) {
-                m_pastedHostPlane = i;
-                break;
+    for (PastedImage &image : m_pastedImages) {
+        if (image.hostPlane > removedPlane) {
+            --image.hostPlane;
+        } else if (image.hostPlane == removedPlane) {
+            image.hostPlane = -1;
+            for (int i = 0; i < m_planes.size(); ++i) {
+                if (m_planes[i].surfaceGroup == image.surfaceGroup) {
+                    image.hostPlane = i;
+                    break;
+                }
             }
-        }
-        if (m_pastedHostPlane < 0) {
-            m_pastedImageAttached = false;
-            m_pastedSurfaceGroup = -1;
-            m_pastedImagePosition = QPointF(0, 0);
+            if (image.hostPlane < 0) {
+                image.attached = false;
+                image.surfaceGroup = -1;
+                image.position = QPointF(0, 0);
+            }
         }
     }
     m_selectedPlane = qMin(m_selectedPlane, m_planes.size() - 1);
@@ -87,11 +90,8 @@ void CanvasDocument::removePlane(int removedPlane)
 // 设置新的浮动图像：放到画布左上角并重置其吸附状态
 void CanvasDocument::setFloatingImage(const QImage &image)
 {
-    m_pastedImage = image.convertToFormat(QImage::Format_ARGB32);
-    m_pastedImagePosition = QPointF(0, 0);
-    m_pastedImageAttached = false;
-    m_pastedSurfaceGroup = -1;
-    m_pastedHostPlane = -1;
+    m_pastedImages.append(PastedImage{image.convertToFormat(QImage::Format_ARGB32), QPointF(0, 0), false, -1, -1});
+    m_activePastedImage = m_pastedImages.size() - 1;
     commitHistory();
 }
 
@@ -100,9 +100,9 @@ void CanvasDocument::setFloatingImage(const QImage &image)
 // 画布坐标还是共享展开曲面坐标系中）。
 bool CanvasDocument::rotateFloatingImage()
 {
-    if (m_pastedImage.isNull())
+    if (!hasFloatingImage())
         return false;
-    m_pastedImage = m_pastedImage.transformed(QTransform().rotate(90),
+    m_pastedImages[m_activePastedImage].image = m_pastedImages[m_activePastedImage].image.transformed(QTransform().rotate(90),
                                                Qt::SmoothTransformation);
     commitHistory();
     return true;
@@ -111,9 +111,9 @@ bool CanvasDocument::rotateFloatingImage()
 // 将浮动图像水平或垂直翻转
 bool CanvasDocument::flipFloatingImage(bool horizontal, bool vertical)
 {
-    if (m_pastedImage.isNull())
+    if (!hasFloatingImage())
         return false;
-    m_pastedImage = m_pastedImage.mirrored(horizontal, vertical);
+    m_pastedImages[m_activePastedImage].image = m_pastedImages[m_activePastedImage].image.mirrored(horizontal, vertical);
     commitHistory();
     return true;
 }
@@ -122,16 +122,14 @@ bool CanvasDocument::flipFloatingImage(bool horizontal, bool vertical)
 void CanvasDocument::setFloatingImagePlacement(const QPointF &position, bool attached,
                                                int surfaceGroup, int hostPlane)
 {
-    m_pastedImagePosition = position;
-    m_pastedImageAttached = attached;
-    m_pastedSurfaceGroup = surfaceGroup;
-    m_pastedHostPlane = hostPlane;
+    if (!hasFloatingImage()) return;
+    auto &item = m_pastedImages[m_activePastedImage]; item.position = position; item.attached = attached; item.surfaceGroup = surfaceGroup; item.hostPlane = hostPlane;
 }
 
 // 已吸附状态下仅移动浮动图像位置（仍处于展开曲面坐标系中）
 void CanvasDocument::setPastedImagePosition(const QPointF &position)
 {
-    m_pastedImagePosition = position;
+    if (hasFloatingImage()) m_pastedImages[m_activePastedImage].position = position;
 }
 
 // 撤销：回退到上一份快照
@@ -184,8 +182,7 @@ void CanvasDocument::commitHistory()
 // 捕获当前状态为一份历史快照
 CanvasDocument::CanvasState CanvasDocument::captureState() const
 {
-    return CanvasState{m_planes, m_selectedPlane, m_pastedImage, m_pastedImagePosition,
-                       m_pastedImageAttached, m_pastedSurfaceGroup, m_pastedHostPlane};
+    return CanvasState{m_planes, m_selectedPlane, m_paintLayer, m_pastedImages, m_activePastedImage};
 }
 
 // 恢复到指定的历史快照（仅文档数据；进行中的交互状态由画布自行清理）
@@ -193,9 +190,13 @@ void CanvasDocument::restoreState(const CanvasState &state)
 {
     m_planes = state.planes;
     m_selectedPlane = state.selectedPlane;
-    m_pastedImage = state.pastedImage;
-    m_pastedImagePosition = state.pastedImagePosition;
-    m_pastedImageAttached = state.pastedImageAttached;
-    m_pastedSurfaceGroup = state.pastedSurfaceGroup;
-    m_pastedHostPlane = state.pastedHostPlane;
+    m_paintLayer = state.paintLayer;
+    m_pastedImages = state.pastedImages;
+    m_activePastedImage = state.activePastedImage;
 }
+
+const QImage &CanvasDocument::pastedImage() const { static const QImage empty; return hasFloatingImage() ? m_pastedImages[m_activePastedImage].image : empty; }
+QPointF CanvasDocument::pastedImagePosition() const { return hasFloatingImage() ? m_pastedImages[m_activePastedImage].position : QPointF(); }
+bool CanvasDocument::pastedImageAttached() const { return hasFloatingImage() && m_pastedImages[m_activePastedImage].attached; }
+int CanvasDocument::pastedSurfaceGroup() const { return hasFloatingImage() ? m_pastedImages[m_activePastedImage].surfaceGroup : -1; }
+int CanvasDocument::pastedHostPlane() const { return hasFloatingImage() ? m_pastedImages[m_activePastedImage].hostPlane : -1; }
