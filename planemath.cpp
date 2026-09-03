@@ -6,6 +6,23 @@
 #include <QVector3D>
 #include <QtMath>
 
+namespace {
+
+// 判断点 p 在变换 t（面片 -> 某目标空间）下的齐次分母 w 是否与面片质心同号、
+// 且不贴近极点（w≈0）。单应变换在面片所在平面外有一个极点线（即“地平线”），
+// 越过它之后映射结果没有意义；画笔向外延伸、浮动图像命中测试都需要此保护。
+// 用质心的符号而非固定正号，是为了兼容顺时针/逆时针两种绕序。
+bool hasFrontHomogeneousW(const QTransform &t, const Facet &facet, const QPointF &p)
+{
+    const QPointF centroid = (facet.corner[0] + facet.corner[1] +
+                              facet.corner[2] + facet.corner[3]) / 4.0;
+    const qreal wCenter = t.m13() * centroid.x() + t.m23() * centroid.y() + t.m33();
+    const qreal w = t.m13() * p.x() + t.m23() * p.y() + t.m33();
+    return wCenter * w > 0.0 && qAbs(w) > 1e-6;
+}
+
+} // namespace
+
 namespace PlaneMath {
 
 // 把 4 个角点组装为多边形。
@@ -16,14 +33,14 @@ QPolygonF planePolygon(const QPointF corner[4])
     return QPolygonF{corner[0], corner[1], corner[2], corner[3]};
 }
 
-// 返回平面的 8 个控制点：4 个角点在前，4 个边中点在后
-QVector<QPointF> handles(const Plane &plane)
+// 返回面片的 8 个控制点：4 个角点在前，4 个边中点在后
+QVector<QPointF> handles(const Facet &facet)
 {
-    return {plane.corner[0], plane.corner[1], plane.corner[2], plane.corner[3],
-            (plane.corner[0] + plane.corner[1]) / 2.0,
-            (plane.corner[1] + plane.corner[2]) / 2.0,
-            (plane.corner[2] + plane.corner[3]) / 2.0,
-            (plane.corner[3] + plane.corner[0]) / 2.0};
+    return {facet.corner[0], facet.corner[1], facet.corner[2], facet.corner[3],
+            (facet.corner[0] + facet.corner[1]) / 2.0,
+            (facet.corner[1] + facet.corner[2]) / 2.0,
+            (facet.corner[2] + facet.corner[3]) / 2.0,
+            (facet.corner[3] + facet.corner[0]) / 2.0};
 }
 
 // 计算点 p 到线段 ab 的距离；t 返回最近点在线段上的参数化位置（0~1）
@@ -39,9 +56,9 @@ qreal distanceToSegment(const QPointF &p, const QPointF &a,
     return QLineF(p, a + d * amount).length();
 }
 
-// 校验平面是否为可用的单应变换目标：必须是非交叉的凸四边形，
+// 校验面片是否为可用的单应变换目标：必须是非交叉的凸四边形，
 // 且不能过于退化（边过短、面积过小或分母过零）。
-bool isValidPlane(const Plane &plane)
+bool isValidPlane(const Facet &facet)
 {
     // 射影变换把单位正方形映射为简单的凸四边形。
     // 必须在进入 quadToQuad() 之前拒绝凹形、自交叉和近乎退化的
@@ -49,9 +66,9 @@ bool isValidPlane(const Plane &plane)
     qreal windingSign = 0.0;
     qreal twiceArea = 0.0;
     for (int i = 0; i < 4; ++i) {
-        const QPointF a = plane.corner[i];
-        const QPointF b = plane.corner[(i + 1) % 4];
-        const QPointF c = plane.corner[(i + 2) % 4];
+        const QPointF a = facet.corner[i];
+        const QPointF b = facet.corner[(i + 1) % 4];
+        const QPointF c = facet.corner[(i + 2) % 4];
         if (QLineF(a, b).length() < 8.0)
             return false;
         const QPointF ab = b - a;
@@ -71,7 +88,7 @@ bool isValidPlane(const Plane &plane)
 
     const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
     QTransform transform;
-    if (!QTransform::quadToQuad(unit, planePolygon(plane.corner), transform))
+    if (!QTransform::quadToQuad(unit, planePolygon(facet.corner), transform))
         return false;
 
     // 齐次分母必须在完整的单位正方形上保持同一符号。
@@ -90,36 +107,46 @@ bool isValidPlane(const Plane &plane)
     return true;
 }
 
-// 归一化 UV 坐标 -> 平面上的图像坐标
-QPointF uvToPlane(const Plane &plane, const QPointF &uv)
+// 归一化 UV 坐标 -> 面片上的图像坐标
+QPointF uvToPlane(const Facet &facet, const QPointF &uv)
 {
     const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
     QTransform transform;
-    if (!QTransform::quadToQuad(unit, planePolygon(plane.corner), transform))
+    if (!QTransform::quadToQuad(unit, planePolygon(facet.corner), transform))
         return {};
     return transform.map(uv);
 }
 
-// 平面上的图像坐标 -> 归一化 UV 坐标（ok 返回变换是否有效）
-QPointF planeToUv(const Plane &plane, const QPointF &point, bool *ok)
+// 面片上的图像坐标 -> 归一化 UV 坐标（ok 返回变换是否有效）
+QPointF planeToUv(const Facet &facet, const QPointF &point, bool *ok)
 {
     QTransform transform;
     const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
-    const bool valid = QTransform::quadToQuad(planePolygon(plane.corner), unit, transform);
+    const bool valid = QTransform::quadToQuad(planePolygon(facet.corner), unit, transform);
+    if (!valid || !hasFrontHomogeneousW(transform, facet, point)) {
+        if (ok)
+            *ok = false;
+        return {};
+    }
     if (ok)
-        *ok = valid;
-    return valid ? transform.map(point) : QPointF();
+        *ok = true;
+    return transform.map(point);
 }
 
-// 平面上的图像坐标 -> 该平面所属分组的共享展开曲面坐标
-QPointF planeToSurface(const Plane &plane, const QPointF &point, bool *ok)
+// 面片上的图像坐标 -> 该面片所属分组的共享展开曲面坐标
+QPointF planeToSurface(const Facet &facet, const QPointF &point, bool *ok)
 {
     QTransform transform;
-    const bool valid = QTransform::quadToQuad(planePolygon(plane.corner),
-                                               planePolygon(plane.surfaceCorner), transform);
+    const bool valid = QTransform::quadToQuad(planePolygon(facet.corner),
+                                               planePolygon(facet.surfaceCorner), transform);
+    if (!valid || !hasFrontHomogeneousW(transform, facet, point)) {
+        if (ok)
+            *ok = false;
+        return {};
+    }
     if (ok)
-        *ok = valid;
-    return valid ? transform.map(point) : QPointF();
+        *ok = true;
+    return transform.map(point);
 }
 
 // 命中测试：返回点所在的最上层平面索引（后创建的优先），无命中返回 -1
@@ -133,9 +160,9 @@ int planeAt(const QVector<Plane> &planes, const QPointF &point)
 }
 
 // 命中测试：返回距离点最近的控制点索引，无命中返回 -1
-int handleAt(const Plane &plane, const QPointF &point, qreal tolerance)
+int handleAt(const Facet &facet, const QPointF &point, qreal tolerance)
 {
-    const QVector<QPointF> hs = handles(plane);
+    const QVector<QPointF> hs = handles(facet);
     for (int i = 0; i < hs.size(); ++i) {
         if (QLineF(hs[i], point).length() <= tolerance)
             return i;
@@ -144,10 +171,10 @@ int handleAt(const Plane &plane, const QPointF &point, qreal tolerance)
 }
 
 // 命中测试：返回点靠近的边缘索引（0~3），无命中返回 -1
-int edgeAt(const Plane &plane, const QPointF &point, qreal tolerance)
+int edgeAt(const Facet &facet, const QPointF &point, qreal tolerance)
 {
     for (int i = 0; i < 4; ++i) {
-        if (distanceToSegment(point, plane.corner[i], plane.corner[(i + 1) % 4]) <= tolerance)
+        if (distanceToSegment(point, facet.corner[i], facet.corner[(i + 1) % 4]) <= tolerance)
             return i;
     }
     return -1;

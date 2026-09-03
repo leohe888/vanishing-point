@@ -51,7 +51,7 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
     return true;
 }
 
-// 将当前场景（背景 + 各平面绘画 + 浮动图像）导出为白底图像文件
+// 将当前场景（背景 + 绘画层 + 浮动图像）导出为白底图像文件
 bool PerspectiveCanvas::saveResult(const QString &fileName) const
 {
     QImage result(m_doc.background().size(), QImage::Format_ARGB32);
@@ -113,14 +113,16 @@ void PerspectiveCanvas::dropEvent(QDropEvent *event)
     }
 }
 
-// 清除所有平面上的绘画内容（不影响平面几何本身）
+// 清除绘画层上的绘画内容（不影响平面几何与浮动图像）
 void PerspectiveCanvas::clearPainting()
 {
-    if (m_doc.planes().isEmpty())
+    if (!m_doc.hasPaintContent()) {
+        emit statusMessage(tr("当前没有可清除的绘画内容"), 2500);
         return;
+    }
     m_doc.clearPainting();
     update();
-    emit statusMessage(tr("已清除所有平面上的绘画内容"), 3000);
+    emit statusMessage(tr("已清除绘画内容"), 3000);
 }
 
 // 把剪贴板中的图像粘贴为新的浮动图像
@@ -145,15 +147,15 @@ void PerspectiveCanvas::pasteClipboardImage()
 // 把拖入或粘贴的图像设置为新的浮动图像
 void PerspectiveCanvas::dropFloatingImage(const QImage &image, const QString &statusText)
 {
-    m_doc.setFloatingImage(image);
+    m_doc.addFloatingImage(image);
     update();
     emit statusMessage(statusText, 3000);
 }
 
-// 将浮动图像顺时针旋转 90°
+// 将当前浮动图像顺时针旋转 90°
 void PerspectiveCanvas::rotateFloatingImage()
 {
-    if (!m_doc.rotateFloatingImage()) {
+    if (!m_doc.rotateImage(m_doc.selectedImage())) {
         emit statusMessage(tr("请先粘贴或拖入一张浮动图像"), 2500);
         return;
     }
@@ -161,10 +163,10 @@ void PerspectiveCanvas::rotateFloatingImage()
     emit statusMessage(tr("浮动图像已顺时针旋转 90°"), 2200);
 }
 
-// 将浮动图像水平翻转
+// 将当前浮动图像水平翻转
 void PerspectiveCanvas::flipFloatingImageHorizontal()
 {
-    if (!m_doc.flipFloatingImage(true, false)) {
+    if (!m_doc.flipImage(m_doc.selectedImage(), true, false)) {
         emit statusMessage(tr("请先粘贴或拖入一张浮动图像"), 2500);
         return;
     }
@@ -172,10 +174,10 @@ void PerspectiveCanvas::flipFloatingImageHorizontal()
     emit statusMessage(tr("浮动图像已水平翻转"), 2200);
 }
 
-// 将浮动图像垂直翻转
+// 将当前浮动图像垂直翻转
 void PerspectiveCanvas::flipFloatingImageVertical()
 {
-    if (!m_doc.flipFloatingImage(false, true)) {
+    if (!m_doc.flipImage(m_doc.selectedImage(), false, true)) {
         emit statusMessage(tr("请先粘贴或拖入一张浮动图像"), 2500);
         return;
     }
@@ -183,7 +185,7 @@ void PerspectiveCanvas::flipFloatingImageVertical()
     emit statusMessage(tr("浮动图像已垂直翻转"), 2200);
 }
 
-// 撤销：回退到上一份快照并清空进行中的交互
+// 撤销：回退到上一份状态并清空进行中的交互
 void PerspectiveCanvas::undo()
 {
     if (!m_doc.undo())
@@ -192,7 +194,7 @@ void PerspectiveCanvas::undo()
     emit statusMessage(tr("已撤销"), 1800);
 }
 
-// 重做：前进到下一份快照并清空进行中的交互
+// 重做：前进到下一份状态并清空进行中的交互
 void PerspectiveCanvas::redo()
 {
     if (!m_doc.redo())
@@ -206,8 +208,10 @@ void PerspectiveCanvas::cancelInteraction()
 {
     m_creationPoints.clear();
     m_dragging = m_drawing = m_extruding = false;
-    m_draggingPastedImage = false;
+    m_draggingImage = -1;
     m_hasExtrudePreview = false;
+    m_brushPlaneIndex = -1;
+    m_hoverPlane = -1;
     m_stateChanged = false;
     update();
 }
@@ -218,12 +222,13 @@ void PerspectiveCanvas::setTool(Tool tool)
     m_tool = tool;
     m_creationPoints.clear();
     m_dragging = m_drawing = false;
-    m_draggingPastedImage = false;
+    m_draggingImage = -1;
+    m_hoverPlane = -1;
     setCursor(tool == EditPlane ? Qt::SizeAllCursor : Qt::CrossCursor);
     const QString messages[] = {
         tr("依次单击四个角点以创建平面"),
         tr("拖动控制点或平面；按住 Ctrl 从边缘拖出垂直于当前平面的平面"),
-        tr("在平面内拖动进行透视绘画")
+        tr("在平面内拖动进行透视绘画，笔触可延伸到平面之外")
     };
     emit statusMessage(messages[tool]);
     update();
@@ -273,58 +278,110 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
     SceneRenderer renderer(m_doc);
     renderer.render(painter, m_scale, true, m_creationPoints,
                     m_hasExtrudePreview ? &m_extrudePreview : nullptr,
-                    m_tool == EditPlane);
+                    m_tool == EditPlane, m_hoverPlane);
 }
 
-// 命中测试：判断某个画布坐标是否落在浮动图像上。
-// 已吸附时可返回该点在浮动图像内的局部坐标及其所在平面索引。
-bool PerspectiveCanvas::pastedImageAt(const QPointF &canvasPoint, QPointF *imagePoint,
-                                      int *planeIndex) const
+// 命中测试：判断某个画布坐标是否落在某张浮动图像上（从最上层开始）。
+// 已吸附时返回该点在图像内的局部坐标。
+bool PerspectiveCanvas::floatingImageAt(const QPointF &canvasPoint, int *imageIndex,
+                                        QPointF *imagePoint) const
 {
-    if (m_doc.pastedImage().isNull())
-        return false;
-    const QRectF imageRect(QPointF(0, 0), QSizeF(m_doc.pastedImage().size()));
-    if (!m_doc.pastedImageAttached()) {
-        const QPointF local = canvasPoint - m_doc.pastedImagePosition();
-        if (!imageRect.contains(local))
-            return false;
-        if (imagePoint)
-            *imagePoint = local;
-        if (planeIndex)
-            *planeIndex = -1;
-        return true;
+    for (int idx = m_doc.images().size() - 1; idx >= 0; --idx) {
+        const FloatingImage &img = m_doc.images()[idx];
+        if (img.image.isNull())
+            continue;
+        const QRectF imageRect(QPointF(0, 0), QSizeF(img.image.size()));
+        if (!img.attached || img.faces.isEmpty()) {
+            const QPointF local = canvasPoint - img.position;
+            if (imageRect.contains(local)) {
+                if (imageIndex)
+                    *imageIndex = idx;
+                if (imagePoint)
+                    *imagePoint = local;
+                return true;
+            }
+            continue;
+        }
+        // 优先选择指针实际所在的面，这样共享边将归属当前显示在顶部的面。
+        for (int f = img.faces.size() - 1; f >= 0; --f) {
+            const Facet &face = img.faces[f];
+            if (!planePolygon(face.corner).containsPoint(canvasPoint, Qt::OddEvenFill))
+                continue;
+            bool ok = false;
+            const QPointF local = planeToSurface(face, canvasPoint, &ok) - img.position;
+            if (ok && imageRect.contains(local)) {
+                if (imageIndex)
+                    *imageIndex = idx;
+                if (imagePoint)
+                    *imagePoint = local;
+                return true;
+            }
+        }
+        // 宿主投影有意延伸到其有限网格之外，因此其可见的延伸部分
+        // 也必须保持可拖动。
+        if (img.hostFace >= 0 && img.hostFace < img.faces.size()) {
+            bool ok = false;
+            const QPointF local = planeToSurface(img.faces[img.hostFace], canvasPoint, &ok) -
+                                  img.position;
+            if (ok && imageRect.contains(local)) {
+                if (imageIndex)
+                    *imageIndex = idx;
+                if (imagePoint)
+                    *imagePoint = local;
+                return true;
+            }
+        }
     }
+    return false;
+}
 
-    // 优先选择指针实际所在的面，这样共享边将归属当前显示在顶部的面。
-    for (int i = m_doc.planes().size() - 1; i >= 0; --i) {
-        const Plane &plane = m_doc.planes()[i];
-        if (plane.surfaceGroup != m_doc.pastedSurfaceGroup() ||
-            !planePolygon(plane.corner).containsPoint(canvasPoint, Qt::OddEvenFill))
+// 把指定浮动图像吸附到目标平面所在的曲面分组：拷贝该分组的全部面片
+// 几何作为严格快照，此后平面增删改都不再影响这张图像。
+void PerspectiveCanvas::attachImageToPlane(int imageIndex, int planeIndex,
+                                           const QPointF &canvasPoint)
+{
+    const Plane &host = m_doc.planes()[planeIndex];
+    QVector<Facet> faces;
+    int hostFace = -1;
+    for (int i = 0; i < m_doc.planes().size(); ++i) {
+        const Plane &p = m_doc.planes()[i];
+        if (p.surfaceGroup != host.surfaceGroup)
+            continue;
+        Facet f;
+        for (int c = 0; c < 4; ++c) {
+            f.corner[c] = p.corner[c];
+            f.surfaceCorner[c] = p.surfaceCorner[c];
+        }
+        if (i == planeIndex)
+            hostFace = faces.size();
+        faces.append(f);
+    }
+    bool ok = false;
+    const QPointF surfacePoint = planeToSurface(host, canvasPoint, &ok);
+    if (!ok)
+        return;
+    m_doc.attachImage(imageIndex, faces, hostFace, surfacePoint - m_imageDragOffset);
+}
+
+// 已吸附图像沿其快照曲面移动；无法映射（越过极点线）时返回 false。
+bool PerspectiveCanvas::moveAttachedImage(int imageIndex, const QPointF &canvasPoint)
+{
+    const FloatingImage &img = m_doc.image(imageIndex);
+    for (int f = img.faces.size() - 1; f >= 0; --f) {
+        if (!planePolygon(img.faces[f].corner).containsPoint(canvasPoint, Qt::OddEvenFill))
             continue;
         bool ok = false;
-        const QPointF local = planeToSurface(plane, canvasPoint, &ok) -
-                              m_doc.pastedImagePosition();
-        if (ok && imageRect.contains(local)) {
-            if (imagePoint)
-                *imagePoint = local;
-            if (planeIndex)
-                *planeIndex = i;
+        const QPointF surfacePoint = planeToSurface(img.faces[f], canvasPoint, &ok);
+        if (ok) {
+            m_doc.setImagePosition(imageIndex, surfacePoint - m_imageDragOffset);
             return true;
         }
     }
-
-    // 宿主投影有意延伸到其有限网格之外，因此其可见的延伸部分
-    // 也必须保持可拖动。
-    const int hostPlane = m_doc.pastedHostPlane();
-    if (hostPlane >= 0 && hostPlane < m_doc.planes().size()) {
+    if (img.hostFace >= 0 && img.hostFace < img.faces.size()) {
         bool ok = false;
-        const QPointF local = planeToSurface(m_doc.planes()[hostPlane], canvasPoint, &ok) -
-                              m_doc.pastedImagePosition();
-        if (ok && imageRect.contains(local)) {
-            if (imagePoint)
-                *imagePoint = local;
-            if (planeIndex)
-                *planeIndex = hostPlane;
+        const QPointF surfacePoint = planeToSurface(img.faces[img.hostFace], canvasPoint, &ok);
+        if (ok) {
+            m_doc.setImagePosition(imageIndex, surfacePoint - m_imageDragOffset);
             return true;
         }
     }
@@ -349,8 +406,6 @@ void PerspectiveCanvas::finishPlaneCreation()
     plane.surfaceCorner[2] = QPointF(surfaceWidth, surfaceHeight);
     plane.surfaceCorner[3] = QPointF(0, surfaceHeight);
     plane.surfaceGroup = m_doc.nextSurfaceGroupId();
-    plane.paint = QImage(TextureSize, TextureSize, QImage::Format_ARGB32);
-    plane.paint.fill(Qt::transparent);
     plane.name = tr("平面 %1").arg(m_doc.planes().size() + 1);
     if (isValidPlane(plane)) {
         m_doc.planes().append(plane);
@@ -379,15 +434,12 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
         return;
 
     QPointF grabbedImagePoint;
-    int grabbedPlane = -1;
-    if (pastedImageAt(point, &grabbedImagePoint, &grabbedPlane)) {
-        m_draggingPastedImage = true;
-        m_pastedDragStartPosition = m_doc.pastedImagePosition();
-        m_pastedDragStartAttached = m_doc.pastedImageAttached();
-        m_pastedDragStartSurfaceGroup = m_doc.pastedSurfaceGroup();
-        m_pastedDragStartHostPlane = m_doc.pastedHostPlane();
-        m_pastedDragOffset = grabbedImagePoint;
-        m_pressImagePoint = point;
+    int grabbedImage = -1;
+    if (floatingImageAt(point, &grabbedImage, &grabbedImagePoint)) {
+        m_draggingImage = grabbedImage;
+        m_doc.setSelectedImage(grabbedImage);
+        m_imageDragStart = m_doc.image(grabbedImage);
+        m_imageDragOffset = grabbedImagePoint;
         m_stateChanged = false;
         setCursor(Qt::ClosedHandCursor);
         return;
@@ -439,6 +491,8 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
         return;
     }
 
+    // 画笔工具：锁定按下时所在的平面，此后整笔跟随该平面的透视，
+    // 即使指针移出平面边界也能继续延伸绘制。
     const int planeIndex = planeAt(m_doc.planes(), point);
     if (planeIndex < 0) {
         emit statusMessage(tr("请在一个透视平面内绘制"), 2500);
@@ -449,9 +503,13 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     const QPointF uv = planeToUv(m_doc.planes()[planeIndex], point, &ok);
     if (!ok)
         return;
+    m_brushPlaneIndex = planeIndex;
+    m_brushFacet = m_doc.planes()[planeIndex];  // 拷贝面片几何作为锁定快照
     m_drawing = true;
     m_lastImagePoint = point;
-    m_paint.beginStroke(m_doc.planes(), planeIndex, uv);
+    m_doc.beginPaintTransaction();
+    const QRect dirty = m_paint.beginStroke(m_doc.paintLayer(), m_brushFacet, uv);
+    m_doc.addPaintDirty(dirty);
     m_stateChanged = true;
     update();
 }
@@ -460,39 +518,17 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
-    if (m_draggingPastedImage && (event->buttons() & Qt::LeftButton)) {
+    if (m_draggingImage >= 0 && (event->buttons() & Qt::LeftButton)) {
         // 指针落在某个平面上时，把图像吸附到该平面的展开曲面；
-        // 落在宿主投影的网格外延伸部分时保持吸附并沿曲面移动；
-        // 其余情况脱离曲面回到画布坐标。
+        // 已吸附且可沿快照曲面映射时继续移动；其余情况脱离回画布坐标。
         const int targetPlane = planeAt(m_doc.planes(), point);
-        bool mapped = false;
         if (targetPlane >= 0) {
-            bool ok = false;
-            const QPointF surfacePoint = planeToSurface(m_doc.planes()[targetPlane], point, &ok);
-            if (ok) {
-                m_doc.setFloatingImagePlacement(surfacePoint - m_pastedDragOffset, true,
-                                                m_doc.planes()[targetPlane].surfaceGroup,
-                                                targetPlane);
-                mapped = true;
-            }
+            attachImageToPlane(m_draggingImage, targetPlane, point);
+        } else if (!m_doc.image(m_draggingImage).attached ||
+                   !moveAttachedImage(m_draggingImage, point)) {
+            m_doc.detachImage(m_draggingImage, point - m_imageDragOffset);
         }
-        if (!mapped && m_doc.pastedImageAttached() && m_doc.pastedHostPlane() >= 0 &&
-            m_doc.pastedHostPlane() < m_doc.planes().size()) {
-            bool ok = false;
-            const QPointF surfacePoint =
-                planeToSurface(m_doc.planes()[m_doc.pastedHostPlane()], point, &ok);
-            if (ok) {
-                m_doc.setPastedImagePosition(surfacePoint - m_pastedDragOffset);
-                mapped = true;
-            }
-        }
-        if (!mapped) {
-            m_doc.setFloatingImagePlacement(point - m_pastedDragOffset, false, -1, -1);
-        }
-        m_stateChanged = m_doc.pastedImagePosition() != m_pastedDragStartPosition ||
-                         m_doc.pastedImageAttached() != m_pastedDragStartAttached ||
-                         m_doc.pastedSurfaceGroup() != m_pastedDragStartSurfaceGroup ||
-                         m_doc.pastedHostPlane() != m_pastedDragStartHostPlane;
+        m_stateChanged = true;
         update();
         return;
     }
@@ -531,18 +567,26 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
         return;
     }
     if (m_drawing && (event->buttons() & Qt::LeftButton)) {
-        m_paint.drawStrokeTo(m_doc.planes(), m_doc.selectedPlane(), point);
+        bool ok = false;
+        const QPointF uv = planeToUv(m_brushFacet, point, &ok);
+        if (ok) {
+            const QRect dirty = m_paint.drawStrokeTo(m_doc.paintLayer(), m_brushFacet, uv);
+            m_doc.addPaintDirty(dirty);
+        }
+        m_lastImagePoint = point;
         update();
         return;
     }
-    if (!m_dragging)
+    if (!m_dragging) {
+        m_hoverPlane = planeAt(m_doc.planes(), point);
         updateHoverCursor(point);
+    }
 }
 
 // 根据悬停位置更新鼠标光标形状（抓手/十字/方向缩放等）
 void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
 {
-    if (pastedImageAt(imagePoint)) {
+    if (floatingImageAt(imagePoint, nullptr, nullptr)) {
         setCursor(Qt::OpenHandCursor);
         return;
     }
@@ -596,8 +640,6 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
         const QRectF bounds = planePolygon(m_extrudePreview.corner).boundingRect();
         const qreal area = qAbs(bounds.width() * bounds.height());
         if (area > 100.0) {
-            m_extrudePreview.paint = QImage(TextureSize, TextureSize, QImage::Format_ARGB32);
-            m_extrudePreview.paint.fill(Qt::transparent);
             m_extrudePreview.name = tr("平面 %1").arg(m_doc.planes().size() + 1);
             m_doc.planes().append(m_extrudePreview);
             m_doc.setSelectedPlane(m_doc.planes().size() - 1);
@@ -606,12 +648,15 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
         }
     }
     m_dragging = m_drawing = m_extruding = false;
-    m_draggingPastedImage = false;
+    m_draggingImage = -1;
     m_hasExtrudePreview = false;
     m_dragHandle = m_dragEdge = -1;
+    m_brushPlaneIndex = -1;
     if (m_stateChanged)
         m_doc.commitHistory();
-    updateHoverCursor(toImage(event->position()));
+    const QPointF point = toImage(event->position());
+    m_hoverPlane = planeAt(m_doc.planes(), point);
+    updateHoverCursor(point);
     update();
 }
 
@@ -622,13 +667,9 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
         pasteClipboardImage();
         event->accept();
     } else if (event->key() == Qt::Key_Escape) {
-        // 取消拖动中的浮动图像，恢复到拖动开始时的放置状态
-        if (m_draggingPastedImage) {
-            m_doc.setFloatingImagePlacement(m_pastedDragStartPosition,
-                                            m_pastedDragStartAttached,
-                                            m_pastedDragStartSurfaceGroup,
-                                            m_pastedDragStartHostPlane);
-        }
+        // 取消拖动中的浮动图像，恢复到拖动开始时的完整快照
+        if (m_draggingImage >= 0)
+            m_doc.image(m_draggingImage) = m_imageDragStart;
         cancelInteraction();
     } else if (event->key() == Qt::Key_Delete && m_tool == EditPlane && m_doc.selectedPlane() >= 0) {
         m_doc.removePlane(m_doc.selectedPlane());

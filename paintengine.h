@@ -3,12 +3,16 @@
 #include "planemath.h"
 
 #include <QColor>
+#include <QImage>
 #include <QPointF>
-#include <QVector>
+#include <QRect>
 
-// 笔刷引擎：在平面的 UV 纹理空间中生成画笔笔迹。
-// 持有笔刷参数，本身不依赖任何窗口部件——
-// 绘画发生在纹理上，透视效果在纹理被投影回平面时自然产生。
+class QPainter;
+
+// 笔刷引擎：在透视面片的归一化 UV 空间中生成软边笔触，并直接烘焙到
+// 画布同尺寸的绘画层（画布/图像坐标系）上。笔触跟随面片的单应变换自然
+// 产生透视缩短，且可以越过面片边界向外延伸——它只依赖面片提供的透视
+// 规则，与平面本身是否持有内容无关。绘画层由 CanvasDocument 持有。
 class PaintEngine
 {
 public:
@@ -19,15 +23,17 @@ public:
     void setColor(const QColor &color) { m_brushColor = color; }
     QColor color() const { return m_brushColor; }
 
-    // 在指定平面上从给定 UV 位置开始一笔，并立即落下第一个笔触点。
-    void beginStroke(QVector<Plane> &planes, int planeIndex, const QPointF &uv);
+    // 在指定面片上从给定 UV 位置开始一笔，并立即落下第一个笔触点。
+    // 返回本次落笔在画布上影响到的矩形（供历史脏矩形累积）。
+    QRect beginStroke(QImage &paintLayer, const Facet &facet, const QPointF &uv);
 
-    // 从上一个 UV 位置向当前图像坐标插值补间，沿笔迹均匀落下一串笔触点。
-    void drawStrokeTo(QVector<Plane> &planes, int planeIndex, const QPointF &imagePoint);
+    // 从上一个 UV 位置向目标 UV 插值补间，沿笔迹均匀落下一串笔触点。
+    // 返回本次补间在画布上影响到的矩形。
+    QRect drawStrokeTo(QImage &paintLayer, const Facet &facet, const QPointF &uv);
 
 private:
-    // 在纹理空间落下一个笔触点。
-    void applyDab(Plane &plane, const QPointF &uv);
+    // 在面片透视下于 UV 位置落下一个软边笔触点；返回画布脏矩形。
+    QRect applyDab(QPainter &painter, const Facet &facet, const QPointF &uv);
 
     QPointF m_lastUv;                          // 最近一次笔迹的 UV 坐标
     QColor m_brushColor = QColor("#e85d4a");   // 画笔颜色

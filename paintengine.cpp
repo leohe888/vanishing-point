@@ -1,85 +1,82 @@
 #include "paintengine.h"
 
 #include <QLineF>
+#include <QPainter>
+#include <QPolygonF>
+#include <QRadialGradient>
+#include <QTransform>
 #include <QtMath>
 
-namespace {
-using PlaneMath::TextureSize;
+using namespace PlaneMath;
 
-// 手工实现的 source-over 颜色合成（上层 top 叠在下层 bottom 上）。
-// QColor 的合成辅助函数便于 QPainter 使用，但逐像素的纹理绘画
-// 需要这里的手工 source-over 运算。
-QColor over(const QColor &bottom, const QColor &top)
+// 在面片透视下于 UV 位置落下一个软边笔触点，返回画布脏矩形。
+QRect PaintEngine::applyDab(QPainter &painter, const Facet &facet, const QPointF &uv)
 {
-    const qreal a = top.alphaF();
-    const qreal outA = a + bottom.alphaF() * (1.0 - a);
-    if (outA < PlaneMath::Epsilon)
-        return Qt::transparent;
-    QColor result;
-    result.setRgbF((top.redF() * a + bottom.redF() * bottom.alphaF() * (1.0 - a)) / outA,
-                   (top.greenF() * a + bottom.greenF() * bottom.alphaF() * (1.0 - a)) / outA,
-                   (top.blueF() * a + bottom.blueF() * bottom.alphaF() * (1.0 - a)) / outA,
-                   outA);
-    return result;
-}
+    // 把画笔直径换算到归一化 UV 空间：用面片的平均水平边长估计
+    // UV -> 画布 的局部尺度。这样同一个笔触点在透视下保持一致的视觉粗细。
+    const qreal planeWidth = (QLineF(facet.corner[0], facet.corner[1]).length() +
+                              QLineF(facet.corner[3], facet.corner[2]).length()) / 2.0;
+    const qreal radiusUv = (m_diameter / 2.0) / qMax(40.0, planeWidth);
+
+    const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
+    QTransform uvToCanvas;
+    if (!QTransform::quadToQuad(unit, planePolygon(facet.corner), uvToCanvas))
+        return QRect();
+
+    // 软边圆点在 UV 空间用径向渐变定义，随面片单应变换投影到画布。
+    // 硬度的含义沿用旧实现：半径 softStart 以内完全不透明，向外平滑淡出。
+    QRadialGradient gradient(uv, radiusUv);
+    QColor core = m_brushColor;
+    core.setAlphaF(m_opacity);
+    gradient.setColorAt(0.0, core);
+    if (m_hardness < 1.0) {
+        gradient.setColorAt(qBound(0.0, m_hardness, 1.0), core);
+        QColor edge = m_brushColor;
+        edge.setAlphaF(0.0);
+        gradient.setColorAt(1.0, edge);
+    } else {
+        gradient.setColorAt(1.0, core);
+    }
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setWorldTransform(uvToCanvas);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(gradient);
+    painter.drawEllipse(QPointF(uv), radiusUv, radiusUv);
+    painter.restore();
+
+    // 返回受影响画布矩形：圆的外接框经单应变换后的包围盒，略微外扩抗锯齿余量。
+    const QRectF uvBounds(uv.x() - radiusUv, uv.y() - radiusUv, radiusUv * 2.0, radiusUv * 2.0);
+    return uvToCanvas.mapRect(uvBounds).toAlignedRect().adjusted(-1, -1, 1, 1);
 }
 
-// 在指定平面上从给定 UV 位置开始一笔
-void PaintEngine::beginStroke(QVector<Plane> &planes, int planeIndex, const QPointF &uv)
+// 从给定 UV 位置开始一笔，并立即落下第一个笔触点。
+QRect PaintEngine::beginStroke(QImage &paintLayer, const Facet &facet, const QPointF &uv)
 {
     m_lastUv = uv;
-    applyDab(planes[planeIndex], uv);
+    QPainter painter(&paintLayer);
+    return applyDab(painter, facet, uv);
 }
 
-// 从上一个 UV 位置向当前位置插值补间，沿笔迹均匀落下一串笔触点
-void PaintEngine::drawStrokeTo(QVector<Plane> &planes, int planeIndex, const QPointF &point)
+// 从上一 UV 位置向目标 UV 插值补间，沿笔迹均匀落下一串笔触点。
+QRect PaintEngine::drawStrokeTo(QImage &paintLayer, const Facet &facet, const QPointF &uv)
 {
-    Plane &plane = planes[planeIndex];
-    bool ok = false;
-    const QPointF uv = PlaneMath::planeToUv(plane, point, &ok);
-    if (!ok || uv.x() < 0 || uv.x() > 1 || uv.y() < 0 || uv.y() > 1)
-        return;
-    const qreal planeWidth = (QLineF(plane.corner[0], plane.corner[1]).length() +
-                              QLineF(plane.corner[3], plane.corner[2]).length()) / 2.0;
-    const qreal textureDiameter = m_diameter * TextureSize / qMax(40.0, planeWidth);
-    const qreal step = qMax(1.0, textureDiameter * 0.18) / TextureSize;
+    const qreal planeWidth = (QLineF(facet.corner[0], facet.corner[1]).length() +
+                              QLineF(facet.corner[3], facet.corner[2]).length()) / 2.0;
+    const qreal radiusUv = (m_diameter / 2.0) / qMax(40.0, planeWidth);
+    // 步长约为笔刷半径的 1/3，保证快速拖动时笔迹连续无断点。
+    const qreal step = qMax(0.001, radiusUv * 0.35);
     const qreal distance = QLineF(m_lastUv, uv).length();
     const int count = qMax(1, int(qCeil(distance / step)));
-    for (int i = 1; i <= count; ++i)
-        applyDab(plane, m_lastUv + (uv - m_lastUv) * (qreal(i) / count));
-    m_lastUv = uv;
-}
 
-// 在平面的纹理空间落下一个笔触点
-void PaintEngine::applyDab(Plane &plane, const QPointF &uv)
-{
-    // 笔刷尺寸从图像像素换算到平面的归一化纹理，使一个笔触点在
-    // 透视作用下保持视觉上的一致大小。
-    const qreal planeWidth = (QLineF(plane.corner[0], plane.corner[1]).length() +
-                              QLineF(plane.corner[3], plane.corner[2]).length()) / 2.0;
-    const qreal radius = qBound(1.0, m_diameter * TextureSize /
-                                      (2.0 * qMax(40.0, planeWidth)), 300.0);
-    const QPointF center(uv.x() * (TextureSize - 1), uv.y() * (TextureSize - 1));
-    const int left = qMax(0, int(qFloor(center.x() - radius)));
-    const int right = qMin(TextureSize - 1, int(qCeil(center.x() + radius)));
-    const int top = qMax(0, int(qFloor(center.y() - radius)));
-    const int bottom = qMin(TextureSize - 1, int(qCeil(center.y() + radius)));
-    const qreal softStart = qBound(0.0, m_hardness, 1.0);
-
-    for (int y = top; y <= bottom; ++y) {
-        QRgb *line = reinterpret_cast<QRgb *>(plane.paint.scanLine(y));
-        for (int x = left; x <= right; ++x) {
-            const qreal d = qSqrt(qPow(x - center.x(), 2) + qPow(y - center.y(), 2)) / radius;
-            if (d > 1.0)
-                continue;
-            qreal falloff = 1.0;
-            if (d > softStart)
-                falloff = (1.0 - d) / qMax(0.001, 1.0 - softStart);
-            falloff = falloff * falloff * (3.0 - 2.0 * falloff);
-
-            QColor source = m_brushColor;
-            source.setAlphaF(source.alphaF() * m_opacity * falloff);
-            line[x] = over(QColor::fromRgba(line[x]), source).rgba();
-        }
+    QPainter painter(&paintLayer);
+    QRect dirty;
+    for (int i = 1; i <= count; ++i) {
+        const QPointF uvi = m_lastUv + (uv - m_lastUv) * (qreal(i) / qreal(count));
+        const QRect r = applyDab(painter, facet, uvi);
+        dirty = dirty.isEmpty() ? r : dirty.united(r);
     }
+    m_lastUv = uv;
+    return dirty;
 }

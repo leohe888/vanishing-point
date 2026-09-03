@@ -35,11 +35,11 @@ public slots:
     void setBrushHardness(int value) { m_paint.setHardness(value); }        // 设置笔刷硬度（0~1）
     void setBrushOpacity(int value) { m_paint.setOpacity(value); }          // 设置笔刷不透明度（0~1）
     void setBrushColor(const QColor &color) { m_paint.setColor(color); }
-    void clearPainting();                  // 清除所有平面上的绘画内容
+    void clearPainting();                  // 清除绘画层上的绘画内容
     void pasteClipboardImage();            // 把剪贴板图像作为浮动图像粘贴到画布
-    void rotateFloatingImage();            // 将浮动图像顺时针旋转 90°
-    void flipFloatingImageHorizontal();    // 将浮动图像水平翻转
-    void flipFloatingImageVertical();      // 将浮动图像垂直翻转
+    void rotateFloatingImage();            // 将当前浮动图像顺时针旋转 90°
+    void flipFloatingImageHorizontal();    // 将当前浮动图像水平翻转
+    void flipFloatingImageVertical();      // 将当前浮动图像垂直翻转
     void undo();                           // 撤销上一步操作
     void redo();                           // 重做被撤销的操作
 
@@ -67,10 +67,14 @@ private:
     QPointF toImage(const QPointF &widgetPoint) const;
     QPointF toWidget(const QPointF &imagePoint) const;
     void updateViewTransform();              // 根据控件尺寸计算缩放与居中偏移
-    // 命中测试：判断某个画布坐标是否落在浮动图像上。
-    // 已吸附时可返回该点在浮动图像内的局部坐标及其所在平面索引。
-    bool pastedImageAt(const QPointF &canvasPoint, QPointF *imagePoint = nullptr,
-                       int *planeIndex = nullptr) const;
+    // 命中测试：判断某个画布坐标是否落在某张浮动图像上（从最上层开始）。
+    // 返回该图像索引；可选输出该点在图像内的局部坐标。
+    bool floatingImageAt(const QPointF &canvasPoint, int *imageIndex = nullptr,
+                         QPointF *imagePoint = nullptr) const;
+    // 把指定浮动图像吸附到目标平面所在的曲面分组（拷贝几何快照）。
+    void attachImageToPlane(int imageIndex, int planeIndex, const QPointF &canvasPoint);
+    // 已吸附图像沿其快照曲面移动；无法映射（越过极点线）时返回 false。
+    bool moveAttachedImage(int imageIndex, const QPointF &canvasPoint);
     void updateHoverCursor(const QPointF &imagePoint);  // 根据悬停位置更新鼠标光标形状
     // 清空一切进行中的交互状态（撤销/重做/Esc 取消后调用）
     void cancelInteraction();
@@ -79,7 +83,7 @@ private:
     // 用当前 4 个创建角点生成平面；有效时追加到文档并进入编辑工具
     void finishPlaneCreation();
 
-    CanvasDocument m_doc;                     // 文档模型（平面、浮动图像、历史）
+    CanvasDocument m_doc;                     // 文档模型（平面、绘画层、浮动图像、历史）
     PaintEngine m_paint;                      // 笔刷引擎
     QVector<QPointF> m_creationPoints;        // 创建平面过程中已点击的角点
     Tool m_tool = CreatePlane;                // 当前工具
@@ -88,17 +92,17 @@ private:
     bool m_dragging = false;                  // 正在拖动平面/控制点
     bool m_drawing = false;                   // 正在绘制笔迹
     bool m_extruding = false;                 // 正在从边缘拖出垂直平面
-    bool m_draggingPastedImage = false;       // 正在拖动浮动图像
+    int m_draggingImage = -1;                 // 正在拖动的浮动图像索引（-1 无）
     QPointF m_pressImagePoint;                // 鼠标按下时的图像坐标
     QPointF m_lastImagePoint;                 // 最近一次的图像坐标
     Plane m_dragStartPlane;                   // 拖动开始时的平面快照
     Plane m_extrudePreview;                   // 垂直平面的拖出预览
     bool m_hasExtrudePreview = false;
-    QPointF m_pastedDragStartPosition;        // 拖动开始时的浮动图像位置（供 Esc 取消恢复）
-    QPointF m_pastedDragOffset;               // 拖动时鼠标相对图像左上角的偏移
-    bool m_pastedDragStartAttached = false;   // 拖动开始时的吸附状态
-    int m_pastedDragStartSurfaceGroup = -1;   // 拖动开始时的曲面分组
-    int m_pastedDragStartHostPlane = -1;      // 拖动开始时的宿主平面
+    Facet m_brushFacet;                       // 画笔锁定的面片快照
+    int m_brushPlaneIndex = -1;               // 画笔锁定的平面索引
+    int m_hoverPlane = -1;                    // 当前悬停的平面索引
+    FloatingImage m_imageDragStart;           // 图像拖动开始时的完整快照（Esc 取消恢复）
+    QPointF m_imageDragOffset;                // 抓取点相对图像左上角的偏移
     qreal m_scale = 1.0;                      // 视图缩放比例
     QPointF m_offset;                         // 视图居中偏移
     bool m_stateChanged = false;              // 自上次提交以来状态是否已变化

@@ -1,19 +1,20 @@
 #include "canvasdocument.h"
 
+#include <QPainter>
 #include <QTransform>
 
 namespace {
-// 历史快照可能包含多张大纹理，因此限制历史数量以防内存失控。
+// 历史条目可能包含多张大纹理的脏矩形，因此限制历史数量以防内存失控。
 constexpr int MaxHistoryStates = 40;
 }
 
-// 构造函数：以空文档的初始状态作为第一份历史快照
+// 构造函数：以空文档的初始状态作为第一份历史状态
 CanvasDocument::CanvasDocument(QObject *parent) : QObject(parent)
 {
     resetHistory();
 }
 
-// 从文件加载背景图像，并清空平面与浮动图像、重置历史记录
+// 从文件加载背景图像，并清空平面、浮动图像与绘画层、重置历史记录
 bool CanvasDocument::loadImage(const QString &fileName)
 {
     QImage image(fileName);
@@ -23,12 +24,12 @@ bool CanvasDocument::loadImage(const QString &fileName)
     m_hasLoadedImage = true;
     emit documentAvailabilityChanged(true);
     m_planes.clear();
-    m_pastedImage = QImage();
-    m_pastedImagePosition = QPointF();
-    m_pastedImageAttached = false;
-    m_pastedSurfaceGroup = -1;
-    m_pastedHostPlane = -1;
+    m_images.clear();
     m_selectedPlane = -1;
+    m_selectedImage = -1;
+    m_paintLayer = QImage(m_background.size(), QImage::Format_ARGB32);
+    m_paintLayer.fill(Qt::transparent);
+    m_paintTransactionActive = false;
     resetHistory();
     return true;
 }
@@ -37,6 +38,11 @@ bool CanvasDocument::loadImage(const QString &fileName)
 void CanvasDocument::setBackground(const QImage &image)
 {
     m_background = image.convertToFormat(QImage::Format_ARGB32);
+    // 绘画层需与背景同尺寸（仅初始化时绘画层尚未建立，或尺寸不一致时重建）
+    if (m_paintLayer.isNull() || m_paintLayer.size() != m_background.size()) {
+        m_paintLayer = QImage(m_background.size(), QImage::Format_ARGB32);
+        m_paintLayer.fill(Qt::transparent);
+    }
 }
 
 // 分配一个新的展开曲面分组号（比现有最大分组号大 1）
@@ -48,130 +54,204 @@ int CanvasDocument::nextSurfaceGroupId() const
     return nextSurfaceGroup;
 }
 
-// 清除所有平面上的绘画内容（不影响平面几何本身）
-void CanvasDocument::clearPainting()
+// 绘画层是否含有任何不透明像素（供“清除绘画”按钮判断是否有内容可清除）
+bool CanvasDocument::hasPaintContent() const
 {
-    for (Plane &plane : m_planes)
-        plane.paint.fill(Qt::transparent);
-    commitHistory();
-}
-
-// 删除指定平面，并修正浮动图像宿主索引与选中索引。
-// 若宿主平面被删除，则尝试在同组内另寻宿主；找不到时浮动图像
-// 脱离曲面并回到画布左上角。
-void CanvasDocument::removePlane(int removedPlane)
-{
-    if (removedPlane < 0 || removedPlane >= m_planes.size())
-        return;
-    m_planes.removeAt(removedPlane);
-    if (m_pastedHostPlane > removedPlane) {
-        --m_pastedHostPlane;
-    } else if (m_pastedHostPlane == removedPlane) {
-        m_pastedHostPlane = -1;
-        for (int i = 0; i < m_planes.size(); ++i) {
-            if (m_planes[i].surfaceGroup == m_pastedSurfaceGroup) {
-                m_pastedHostPlane = i;
-                break;
-            }
-        }
-        if (m_pastedHostPlane < 0) {
-            m_pastedImageAttached = false;
-            m_pastedSurfaceGroup = -1;
-            m_pastedImagePosition = QPointF(0, 0);
+    if (m_paintLayer.isNull())
+        return false;
+    for (int y = 0; y < m_paintLayer.height(); ++y) {
+        const QRgb *line = reinterpret_cast<const QRgb *>(m_paintLayer.constScanLine(y));
+        for (int x = 0; x < m_paintLayer.width(); ++x) {
+            if (qAlpha(line[x]) != 0)
+                return true;
         }
     }
-    m_selectedPlane = qMin(m_selectedPlane, m_planes.size() - 1);
+    return false;
+}
+
+// 清空绘画层（不影响平面几何与浮动图像）
+void CanvasDocument::clearPainting()
+{
+    if (m_paintLayer.isNull())
+        return;
+    beginPaintTransaction();
+    addPaintDirty(m_paintLayer.rect());
+    m_paintLayer.fill(Qt::transparent);
     commitHistory();
 }
 
-// 设置新的浮动图像：放到画布左上角并重置其吸附状态
-void CanvasDocument::setFloatingImage(const QImage &image)
+// 开始一次绘画事务：浅拷贝当前绘画层作为撤销基线（隐式共享，O(1)）
+void CanvasDocument::beginPaintTransaction()
 {
-    m_pastedImage = image.convertToFormat(QImage::Format_ARGB32);
-    m_pastedImagePosition = QPointF(0, 0);
-    m_pastedImageAttached = false;
-    m_pastedSurfaceGroup = -1;
-    m_pastedHostPlane = -1;
+    m_paintBefore = m_paintLayer;
+    m_paintDirtyRect = QRect();
+    m_paintTransactionActive = true;
+}
+
+// 累积本次绘画事务的脏矩形
+void CanvasDocument::addPaintDirty(const QRect &rect)
+{
+    if (rect.isEmpty())
+        return;
+    m_paintDirtyRect = m_paintDirtyRect.isEmpty() ? rect : m_paintDirtyRect.united(rect);
+}
+
+// 删除指定平面。内容已与平面解耦：浮动图像持有自己的几何快照，
+// 绘画层独立于平面，因此删除平面无需修正任何内容。
+void CanvasDocument::removePlane(int index)
+{
+    if (index < 0 || index >= m_planes.size())
+        return;
+    m_planes.removeAt(index);
+    if (m_selectedPlane > index)
+        --m_selectedPlane;
+    else if (m_selectedPlane == index)
+        m_selectedPlane = m_planes.isEmpty() ? -1 : qMin(index, m_planes.size() - 1);
     commitHistory();
 }
 
-// 将浮动图像顺时针旋转 90°。
-// 直接旋转位图本身，保持其左上角位置不变（无论该位置处于
-// 画布坐标还是共享展开曲面坐标系中）。
-bool CanvasDocument::rotateFloatingImage()
+// 追加一张浮动图像到画布左上角，返回其索引
+int CanvasDocument::addFloatingImage(const QImage &image)
 {
-    if (m_pastedImage.isNull())
+    FloatingImage floating;
+    floating.image = image.convertToFormat(QImage::Format_ARGB32);
+    floating.position = QPointF(0, 0);
+    floating.attached = false;
+    floating.hostFace = -1;
+    m_images.append(floating);
+    m_selectedImage = m_images.size() - 1;
+    commitHistory();
+    return m_selectedImage;
+}
+
+// 仅移动图像位置（不改变吸附状态）
+void CanvasDocument::setImagePosition(int index, const QPointF &position)
+{
+    if (index < 0 || index >= m_images.size())
+        return;
+    m_images[index].position = position;
+}
+
+// 把图像吸附到一组几何快照上（严格快照：此后平面增删改不再影响它）
+void CanvasDocument::attachImage(int index, const QVector<Facet> &faces, int hostFace,
+                                 const QPointF &surfacePosition)
+{
+    if (index < 0 || index >= m_images.size())
+        return;
+    FloatingImage &img = m_images[index];
+    img.faces = faces;
+    img.hostFace = hostFace;
+    img.position = surfacePosition;
+    img.attached = true;
+}
+
+// 让图像脱离曲面，回到画布坐标
+void CanvasDocument::detachImage(int index, const QPointF &canvasPosition)
+{
+    if (index < 0 || index >= m_images.size())
+        return;
+    FloatingImage &img = m_images[index];
+    img.faces.clear();
+    img.hostFace = -1;
+    img.position = canvasPosition;
+    img.attached = false;
+}
+
+// 将指定浮动图像顺时针旋转 90°（直接旋转位图，位置不变）
+bool CanvasDocument::rotateImage(int index)
+{
+    if (index < 0 || index >= m_images.size() || m_images[index].image.isNull())
         return false;
-    m_pastedImage = m_pastedImage.transformed(QTransform().rotate(90),
-                                               Qt::SmoothTransformation);
+    m_images[index].image = m_images[index].image.transformed(QTransform().rotate(90),
+                                                               Qt::SmoothTransformation);
     commitHistory();
     return true;
 }
 
-// 将浮动图像水平或垂直翻转
-bool CanvasDocument::flipFloatingImage(bool horizontal, bool vertical)
+// 将指定浮动图像水平或垂直翻转
+bool CanvasDocument::flipImage(int index, bool horizontal, bool vertical)
 {
-    if (m_pastedImage.isNull())
+    if (index < 0 || index >= m_images.size() || m_images[index].image.isNull())
         return false;
-    m_pastedImage = m_pastedImage.mirrored(horizontal, vertical);
+    m_images[index].image = m_images[index].image.mirrored(horizontal, vertical);
     commitHistory();
     return true;
 }
 
-// 一次性更新浮动图像的完整放置状态（位置 + 吸附信息）
-void CanvasDocument::setFloatingImagePlacement(const QPointF &position, bool attached,
-                                               int surfaceGroup, int hostPlane)
-{
-    m_pastedImagePosition = position;
-    m_pastedImageAttached = attached;
-    m_pastedSurfaceGroup = surfaceGroup;
-    m_pastedHostPlane = hostPlane;
-}
-
-// 已吸附状态下仅移动浮动图像位置（仍处于展开曲面坐标系中）
-void CanvasDocument::setPastedImagePosition(const QPointF &position)
-{
-    m_pastedImagePosition = position;
-}
-
-// 撤销：回退到上一份快照
+// 撤销：回退到上一状态（结构 + 绘画层脏矩形反演）
 bool CanvasDocument::undo()
 {
     if (m_historyIndex <= 0)
         return false;
-    restoreState(m_history[--m_historyIndex]);
+    const HistoryEntry &leaving = m_history[m_historyIndex];
+    --m_historyIndex;
+    restoreStructure(m_history[m_historyIndex]);
+    if (!leaving.paintRect.isEmpty())
+        applyPaint(leaving.paintRect, leaving.paintBefore);
     emit canUndoChanged(m_historyIndex > 0);
     emit canRedoChanged(true);
     return true;
 }
 
-// 重做：前进到下一份快照
+// 重做：前进到下一状态
 bool CanvasDocument::redo()
 {
     if (m_historyIndex + 1 >= m_history.size())
         return false;
-    restoreState(m_history[++m_historyIndex]);
+    ++m_historyIndex;
+    const HistoryEntry &target = m_history[m_historyIndex];
+    restoreStructure(target);
+    if (!target.paintRect.isEmpty())
+        applyPaint(target.paintRect, target.paintAfter);
     emit canUndoChanged(true);
     emit canRedoChanged(m_historyIndex + 1 < m_history.size());
     return true;
 }
 
-// 清空历史并以当前状态作为初始快照（用于加载新文档）
+// 清空历史并以当前状态作为初始状态（用于加载新文档）
 void CanvasDocument::resetHistory()
 {
     m_history.clear();
-    m_history.append(captureState());
+    HistoryEntry initial;
+    initial.planes = m_planes;
+    initial.selectedPlane = m_selectedPlane;
+    initial.images = m_images;
+    initial.selectedImage = m_selectedImage;
+    m_history.append(initial);
     m_historyIndex = 0;
+    m_paintTransactionActive = false;
+    m_paintBefore = QImage();
+    m_paintDirtyRect = QRect();
     emit canUndoChanged(false);
     emit canRedoChanged(false);
 }
 
-// 提交一次状态变更：丢弃旧的重做分支，追加新快照并裁剪历史长度
+// 提交一次状态变更：丢弃旧的重做分支，追加新状态并裁剪历史长度
 void CanvasDocument::commitHistory()
 {
     while (m_history.size() > m_historyIndex + 1)
         m_history.removeLast();
-    m_history.append(captureState());
+
+    HistoryEntry entry;
+    entry.planes = m_planes;
+    entry.selectedPlane = m_selectedPlane;
+    entry.images = m_images;
+    entry.selectedImage = m_selectedImage;
+
+    // 绘画层只记录本次变动的脏矩形前后像素
+    if (m_paintTransactionActive && !m_paintDirtyRect.isEmpty()) {
+        const QRect dirty = m_paintDirtyRect.intersected(m_paintLayer.rect());
+        if (!dirty.isEmpty()) {
+            entry.paintRect = dirty;
+            entry.paintBefore = m_paintBefore.copy(dirty);
+            entry.paintAfter = m_paintLayer.copy(dirty);
+        }
+    }
+    m_paintTransactionActive = false;
+    m_paintBefore = QImage();
+    m_paintDirtyRect = QRect();
+
+    m_history.append(entry);
     ++m_historyIndex;
     if (m_history.size() > MaxHistoryStates) {
         m_history.removeFirst();
@@ -181,21 +261,21 @@ void CanvasDocument::commitHistory()
     emit canRedoChanged(false);
 }
 
-// 捕获当前状态为一份历史快照
-CanvasDocument::CanvasState CanvasDocument::captureState() const
+// 仅恢复结构部分（平面 + 浮动图像 + 选中状态）
+void CanvasDocument::restoreStructure(const HistoryEntry &entry)
 {
-    return CanvasState{m_planes, m_selectedPlane, m_pastedImage, m_pastedImagePosition,
-                       m_pastedImageAttached, m_pastedSurfaceGroup, m_pastedHostPlane};
+    m_planes = entry.planes;
+    m_selectedPlane = entry.selectedPlane;
+    m_images = entry.images;
+    m_selectedImage = entry.selectedImage;
 }
 
-// 恢复到指定的历史快照（仅文档数据；进行中的交互状态由画布自行清理）
-void CanvasDocument::restoreState(const CanvasState &state)
+// 把像素直接覆盖回绘画层的指定矩形（用于脏矩形的撤销/重做）
+void CanvasDocument::applyPaint(const QRect &rect, const QImage &pixels)
 {
-    m_planes = state.planes;
-    m_selectedPlane = state.selectedPlane;
-    m_pastedImage = state.pastedImage;
-    m_pastedImagePosition = state.pastedImagePosition;
-    m_pastedImageAttached = state.pastedImageAttached;
-    m_pastedSurfaceGroup = state.pastedSurfaceGroup;
-    m_pastedHostPlane = state.pastedHostPlane;
+    if (rect.isEmpty() || pixels.isNull())
+        return;
+    QPainter painter(&m_paintLayer);
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    painter.drawImage(rect.topLeft(), pixels);
 }
