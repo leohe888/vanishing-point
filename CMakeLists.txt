@@ -8,11 +8,21 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 qt_standard_project_setup()
 
 # 可执行目标：Windows 下为无控制台窗口的 GUI 程序，macOS 下为应用 Bundle
+# 模块划分：几何算法(planemath)、文档模型(canvasdocument)、笔刷引擎(paintengine)、
+# 场景渲染(scenerenderer)、交互控件(perspectivecanvas)
 qt_add_executable(VanisingPoint
     WIN32 MACOSX_BUNDLE
     main.cpp
     mainwindow.cpp
     mainwindow.h
+    planemath.cpp
+    planemath.h
+    canvasdocument.cpp
+    canvasdocument.h
+    paintengine.cpp
+    paintengine.h
+    scenerenderer.cpp
+    scenerenderer.h
     perspectivecanvas.cpp
     perspectivecanvas.h
 )
