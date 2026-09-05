@@ -786,6 +786,18 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+    if (m_gesture == Gesture::Plane && m_doc.selectedPlane() >= 0) {
+        Plane candidate;
+        const bool valid = m_planeTool.update(toImage(event->position()), &candidate);
+        if (m_planeTool.extruding()) {
+            m_hasExtrudePreview = valid;
+            if (valid)
+                m_extrudePreview = candidate;
+        } else if (valid) {
+            m_doc.setPlane(m_doc.selectedPlane(), candidate);
+            m_stateChanged = planePolygon(candidate.corner) != planePolygon(m_planeTool.start().corner);
+        }
+    }
     if (m_imageTool.transforming() && m_draggingImage >= 0)
         updateImageTransform(toImage(event->position()), event->modifiers());
     m_imageTool.reset();
@@ -803,10 +815,12 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
         const qreal area = qAbs(bounds.width() * bounds.height());
         if (area > 100.0) {
             m_extrudePreview.name = tr("平面 %1").arg(m_doc.planes().size() + 1);
-            m_doc.appendPlane(m_extrudePreview);
-            m_doc.setSelectedPlane(m_doc.planes().size() - 1);
-            m_stateChanged = true;
-            emit statusMessage(tr("已创建相邻的垂直平面"), 3000);
+            const int index = m_doc.appendPlane(m_extrudePreview);
+            if (index >= 0) {
+                m_doc.setSelectedPlane(index);
+                m_stateChanged = true;
+                emit statusMessage(tr("已创建相邻的垂直平面"), 3000);
+            }
         }
     }
     m_gesture = Gesture::Idle;

@@ -31,14 +31,45 @@ private:
         return result;
     }
     static void mouse(PerspectiveCanvas &canvas, QEvent::Type type, QPointF point,
-                      Qt::MouseButton button, Qt::MouseButtons buttons)
+                      Qt::MouseButton button, Qt::MouseButtons buttons,
+                      Qt::KeyboardModifiers modifiers = Qt::NoModifier)
     {
         const QPointF local = point * 1.17 + QPointF(16, 16);
-        QMouseEvent event(type, local, local, button, buttons, Qt::NoModifier);
+        QMouseEvent event(type, local, local, button, buttons, modifiers);
         QApplication::sendEvent(&canvas, &event);
     }
 
 private slots:
+    void extrusionUsesReleasePosition()
+    {
+        QTemporaryDir dir;
+        QVERIFY(background().save(dir.filePath("background.png")));
+        PerspectiveCanvas canvas;
+        canvas.resize(500, 500);
+        canvas.show();
+        QVERIFY(canvas.loadImage(dir.filePath("background.png")));
+        const Plane source = plane();
+        for (const QPointF &point : PlaneMath::planePolygon(source.corner)) {
+            mouse(canvas, QEvent::MouseButtonPress, point, Qt::LeftButton, Qt::LeftButton);
+            mouse(canvas, QEvent::MouseButtonRelease, point, Qt::LeftButton, Qt::NoButton);
+        }
+        canvas.setTool(PerspectiveCanvas::EditPlane);
+        const QPointF press = (source.corner[0] + source.corner[1]) / 2;
+        QPointF direction;
+        QVERIFY(PlaneMath::perpendicularDirection(source, press, QSize(400, 400), &direction));
+        mouse(canvas, QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        // 中间没有 mouseMove：释放事件本身也必须更新构造结果。
+        mouse(canvas, QEvent::MouseButtonRelease, press + direction * 60, Qt::LeftButton, Qt::NoButton);
+        canvas.undo();
+        QVERIFY(canvas.hasSelectedPlane()); // 仅撤销新建的面，原面仍在
+        mouse(canvas, QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier);
+        mouse(canvas, QEvent::MouseMove, press + direction * 60, Qt::NoButton, Qt::LeftButton);
+        // 最后又回到共享边释放，不能提交之前缓存的有效预览。
+        mouse(canvas, QEvent::MouseButtonRelease, press, Qt::LeftButton, Qt::NoButton);
+        canvas.undo();
+        QVERIFY(!canvas.hasSelectedPlane());
+    }
+
     void mappingUsesReferenceHalfPlane()
     {
         const auto mapping = PlaneMath::surfaceMapping(plane());

@@ -57,6 +57,16 @@ if(VP_BUILD_TESTS)
         add_test(NAME ArchitectureTests COMMAND ArchitectureTests -platform offscreen)
     endif()
     set_tests_properties(EditorRegressionTests ArchitectureTests PROPERTIES TIMEOUT 60)
+    qt_add_executable(PerpendicularPlaneTests tests/perpendicularplanetests.cpp)
+    target_link_libraries(PerpendicularPlaneTests PRIVATE VanishingCore Qt::Test)
+    set_target_properties(PerpendicularPlaneTests PROPERTIES WIN32_EXECUTABLE FALSE)
+    if(WIN32)
+        add_test(NAME PerpendicularPlaneTests COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=${VP_TEST_RUNTIME_PATH}" $<TARGET_FILE:PerpendicularPlaneTests>)
+    else()
+        add_test(NAME PerpendicularPlaneTests COMMAND PerpendicularPlaneTests)
+    endif()
+    set_tests_properties(PerpendicularPlaneTests PROPERTIES TIMEOUT 60)
 endif()
 
 # 安装规则：Bundle 安装到根目录，其余平台按标准目录安装
