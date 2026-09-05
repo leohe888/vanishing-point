@@ -5,6 +5,7 @@
 #include <QPolygonF>
 #include <QString>
 #include <QVector>
+#include "projectivemapping.h"
 
 // 一个面片：画布上的透视四边形，以及它在展开曲面上的对应四边形。
 //
@@ -32,6 +33,8 @@ struct Plane : Facet {
 // 这些函数不持有任何状态，所需的上下文（视图缩放、背景尺寸、
 // 按下起点等）一律由调用方作为参数提供，因此可以独立测试。
 namespace PlaneMath {
+ProjectiveMapping surfaceMapping(const Facet &facet);
+ProjectiveMapping uvMapping(const Facet &facet);
 
 // 纹理分辨率固定不变，使绘画质量与源图像尺寸及当前画布缩放级别无关。
 constexpr int TextureSize = 1024;

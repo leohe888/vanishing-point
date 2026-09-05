@@ -18,10 +18,15 @@ QRect PaintEngine::applyDab(QPainter &painter, const Facet &facet, const QPointF
                               QLineF(facet.corner[3], facet.corner[2]).length()) / 2.0;
     const qreal radiusUv = (m_diameter / 2.0) / qMax(40.0, planeWidth);
 
-    const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
-    QTransform uvToCanvas;
-    if (!QTransform::quadToQuad(unit, planePolygon(facet.corner), uvToCanvas))
+    const ProjectiveMapping mapping = uvMapping(facet);
+    const QTransform &uvToCanvas = mapping.forward();
+    const QRectF bounds(uv.x() - radiusUv, uv.y() - radiusUv, radiusUv * 2, radiusUv * 2);
+    QPointF mapped;
+    if (!mapping.isValid())
         return QRect();
+    for (const QPointF &corner : {bounds.topLeft(), bounds.topRight(), bounds.bottomLeft(), bounds.bottomRight()})
+        if (!mapping.toCanvas(corner, &mapped))
+            return {};
 
     // 软边圆点在 UV 空间用径向渐变定义，随面片单应变换投影到画布。
     // 硬度的含义沿用旧实现：半径 softStart 以内完全不透明，向外平滑淡出。

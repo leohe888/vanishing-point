@@ -6,24 +6,17 @@
 #include <QVector3D>
 #include <QtMath>
 
-namespace {
-
-// 判断点 p 在变换 t（面片 -> 某目标空间）下的齐次分母 w 是否与面片质心同号、
-// 且不贴近极点（w≈0）。单应变换在面片所在平面外有一个极点线（即“地平线”），
-// 越过它之后映射结果没有意义；画笔向外延伸、浮动图像命中测试都需要此保护。
-// 用质心的符号而非固定正号，是为了兼容顺时针/逆时针两种绕序。
-bool hasFrontHomogeneousW(const QTransform &t, const Facet &facet, const QPointF &p)
+namespace PlaneMath {
+ProjectiveMapping surfaceMapping(const Facet &facet)
 {
-    const QPointF centroid = (facet.corner[0] + facet.corner[1] +
-                              facet.corner[2] + facet.corner[3]) / 4.0;
-    const qreal wCenter = t.m13() * centroid.x() + t.m23() * centroid.y() + t.m33();
-    const qreal w = t.m13() * p.x() + t.m23() * p.y() + t.m33();
-    return wCenter * w > 0.0 && qAbs(w) > 1e-6;
+    return {planePolygon(facet.surfaceCorner), planePolygon(facet.corner)};
 }
 
-} // namespace
+ProjectiveMapping uvMapping(const Facet &facet)
+{
+    return {QPolygonF{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)}, planePolygon(facet.corner)};
+}
 
-namespace PlaneMath {
 
 // 把 4 个角点组装为多边形。
 QPolygonF planePolygon(const QPointF corner[4])
@@ -110,43 +103,29 @@ bool isValidPlane(const Facet &facet)
 // 归一化 UV 坐标 -> 面片上的图像坐标
 QPointF uvToPlane(const Facet &facet, const QPointF &uv)
 {
-    const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
-    QTransform transform;
-    if (!QTransform::quadToQuad(unit, planePolygon(facet.corner), transform))
-        return {};
-    return transform.map(uv);
+    QPointF result;
+    uvMapping(facet).toCanvas(uv, &result);
+    return result;
 }
 
 // 面片上的图像坐标 -> 归一化 UV 坐标（ok 返回变换是否有效）
 QPointF planeToUv(const Facet &facet, const QPointF &point, bool *ok)
 {
-    QTransform transform;
-    const QPolygonF unit{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
-    const bool valid = QTransform::quadToQuad(planePolygon(facet.corner), unit, transform);
-    if (!valid || !hasFrontHomogeneousW(transform, facet, point)) {
-        if (ok)
-            *ok = false;
-        return {};
-    }
+    QPointF result;
+    const bool valid = uvMapping(facet).fromCanvas(point, &result);
     if (ok)
-        *ok = true;
-    return transform.map(point);
+        *ok = valid;
+    return result;
 }
 
 // 面片上的图像坐标 -> 该面片所属分组的共享展开曲面坐标
 QPointF planeToSurface(const Facet &facet, const QPointF &point, bool *ok)
 {
-    QTransform transform;
-    const bool valid = QTransform::quadToQuad(planePolygon(facet.corner),
-                                               planePolygon(facet.surfaceCorner), transform);
-    if (!valid || !hasFrontHomogeneousW(transform, facet, point)) {
-        if (ok)
-            *ok = false;
-        return {};
-    }
+    QPointF result;
+    const bool valid = surfaceMapping(facet).fromCanvas(point, &result);
     if (ok)
-        *ok = true;
-    return transform.map(point);
+        *ok = valid;
+    return result;
 }
 
 // 命中测试：返回点所在的最上层平面索引（后创建的优先），无命中返回 -1
@@ -191,23 +170,13 @@ bool movePlaneOnSurface(const Plane &source, const QPointF &dragPoint,
     const QPointF drag = planeToSurface(source, dragPoint, &dragOk);
     if (!pressOk || !dragOk)
         return false;
-    QTransform projection;
-    if (!QTransform::quadToQuad(planePolygon(source.surfaceCorner), planePolygon(source.corner), projection))
-        return false;
-    const QPointF center = (source.surfaceCorner[0] + source.surfaceCorner[1]
-                            + source.surfaceCorner[2] + source.surfaceCorner[3]) / 4;
-    auto denominator = [&projection](const QPointF &point) {
-        return projection.m13() * point.x() + projection.m23() * point.y() + projection.m33();
-    };
-    const qreal referenceW = denominator(center);
+    const ProjectiveMapping projection = surfaceMapping(source);
     const QPointF delta = drag - press;
     Plane candidate = source;
     for (int i = 0; i < 4; ++i) {
         candidate.surfaceCorner[i] = source.surfaceCorner[i] + delta;
-        const qreal w = denominator(candidate.surfaceCorner[i]);
-        if (!qIsFinite(w) || w * referenceW <= 0 || qAbs(w) <= qAbs(referenceW) * 1e-6)
+        if (!projection.toCanvas(candidate.surfaceCorner[i], &candidate.corner[i]))
             return false;
-        candidate.corner[i] = projection.map(candidate.surfaceCorner[i]);
         const QPointF &corner = candidate.corner[i];
         if (!qIsFinite(corner.x()) || !qIsFinite(corner.y())
             || qAbs(corner.x()) > 1e7 || qAbs(corner.y()) > 1e7)

@@ -97,6 +97,34 @@ void CanvasDocument::addPaintDirty(const QRect &rect)
 }
 
 // 删除指定平面。内容已与平面解耦：浮动图像持有自己的几何快照，
+int CanvasDocument::appendPlane(const Plane &plane)
+{
+    if (!PlaneMath::isValidPlane(plane))
+        return -1;
+    m_planes.append(plane);
+    return m_planes.size() - 1;
+}
+
+bool CanvasDocument::setPlane(int index, const Plane &plane)
+{
+    if (index < 0 || index >= m_planes.size() || !PlaneMath::isValidPlane(plane))
+        return false;
+    m_planes[index] = plane;
+    return true;
+}
+
+bool CanvasDocument::setImage(int index, const FloatingImage &image)
+{
+    if (index < 0 || index >= m_images.size() || image.image.isNull()
+        || !qIsFinite(image.position.x()) || !qIsFinite(image.position.y())
+        || !qIsFinite(image.rotation) || !qIsFinite(image.scale.x()) || !qIsFinite(image.scale.y())
+        || image.scale.x() <= 0 || image.scale.y() <= 0)
+        return false;
+    m_images[index] = image;
+    return true;
+}
+
+// 删除指定平面。内容已与平面解耦：浮动图像持有自己的几何快照，
 // 绘画层独立于平面，因此删除平面无需修正任何内容。
 void CanvasDocument::removePlane(int index)
 {
@@ -221,6 +249,9 @@ bool CanvasDocument::redo()
 // 清空历史并以当前状态作为初始状态（用于加载新文档）
 void CanvasDocument::resetHistory()
 {
+    m_editActive = false;
+    m_editBefore = HistoryEntry();
+    m_editPaintBefore = QImage();
     m_history.clear();
     HistoryEntry initial;
     initial.planes = m_planes;
@@ -237,6 +268,50 @@ void CanvasDocument::resetHistory()
 }
 
 // 提交一次状态变更：丢弃旧的重做分支，追加新状态并裁剪历史长度
+void CanvasDocument::beginEdit()
+{
+    if (m_editActive)
+        return;
+    m_editBefore.planes = m_planes;
+    m_editBefore.selectedPlane = m_selectedPlane;
+    m_editBefore.images = m_images;
+    m_editBefore.selectedImage = m_selectedImage;
+    m_editPaintBefore = m_paintLayer;
+    m_editActive = true;
+}
+
+void CanvasDocument::commitEdit(bool changed)
+{
+    if (!m_editActive)
+        return;
+    m_editActive = false;
+    m_editBefore = HistoryEntry();
+    m_editPaintBefore = QImage();
+    if (changed)
+        commitHistory();
+    else {
+        m_paintTransactionActive = false;
+        m_paintBefore = QImage();
+        m_paintDirtyRect = QRect();
+    }
+}
+
+void CanvasDocument::cancelEdit()
+{
+    if (!m_editActive)
+        return;
+    // 恢复选中会同步通知 UI，先结束事务以避免信号重入。
+    m_editActive = false;
+    const HistoryEntry before = m_editBefore;
+    m_paintLayer = m_editPaintBefore;
+    m_editBefore = HistoryEntry();
+    m_editPaintBefore = QImage();
+    m_paintBefore = QImage();
+    m_paintDirtyRect = QRect();
+    m_paintTransactionActive = false;
+    restoreStructure(before);
+}
+
 void CanvasDocument::commitHistory()
 {
     while (m_history.size() > m_historyIndex + 1)

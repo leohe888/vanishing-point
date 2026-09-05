@@ -30,7 +30,7 @@ public:
                 const QVector<QPointF> &creationPoints = {},
                 const Plane *extrudePreview = nullptr,
                 bool editHandlesVisible = false,
-                int hoveredPlane = -1, qreal antsPhase = 0);
+                int hoveredPlane = -1, qreal antsPhase = 0, bool drawContent = true);
 
     // 各投影片段的并集外轮廓，不包含平面之间的内部接缝。
     static QPainterPath floatingImageOutline(const FloatingImage &image);

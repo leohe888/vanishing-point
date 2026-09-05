@@ -32,11 +32,10 @@ QPointF toCanvas(const FloatingImage &image, const QPointF &point, int *faceInde
         *faceIndex = face;
     if (!image.attached || face < 0 || face >= image.faces.size())
         return point;
-    QTransform projection;
-    const Facet &facet = image.faces[face];
-    if (!QTransform::quadToQuad(PlaneMath::planePolygon(facet.surfaceCorner), PlaneMath::planePolygon(facet.corner), projection))
-        return point;
-    return projection.map(point);
+    QPointF result;
+    if (!PlaneMath::surfaceMapping(image.faces[face]).toCanvas(point, &result))
+        return QPointF(qQNaN(), qQNaN());
+    return result;
 }
 
 bool fromCanvas(const FloatingImage &image, const QPointF &point, QPointF *result, int fallbackFace)

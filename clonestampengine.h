@@ -22,5 +22,6 @@ private:
     QImage m_source;
     QTransform m_targetToCanvas, m_canvasToTarget, m_sourceToCanvas;
     QPointF m_offset, m_lastPosition;
+    QPointF m_targetReference, m_canvasReference, m_sourceReference;
     qreal m_diameter = 42, m_hardness = .75, m_opacity = 1;
 };

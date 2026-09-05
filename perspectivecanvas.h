@@ -2,8 +2,11 @@
 
 #include "canvasdocument.h"
 #include "paintengine.h"
-#include "clonestampengine.h"
+#include "clonetool.h"
 #include "planemath.h"
+#include "imagetransformtool.h"
+#include "planeedittool.h"
+#include "scenecontentcache.h"
 
 #include <QColor>
 #include <QPointF>
@@ -13,9 +16,8 @@
 class QPainter;
 
 // 透视画布：本应用的核心控件。
-// 拆分之后它只负责两件事：视图变换（缩放/居中）与全部鼠标、键盘、
-// 拖放交互。文档状态与撤销历史在 CanvasDocument 中，笔迹生成在
-// PaintEngine 中，场景绘制在 SceneRenderer 中。
+// 负责视图变换、输入路由和操作事务的协调；工具维护各自的拖动状态，
+// 几何、文档、绘画引擎和场景缓存分别由独立模块承担。
 class PerspectiveCanvas : public QWidget
 {
     Q_OBJECT
@@ -33,16 +35,13 @@ public:
 
 public slots:
     void setTool(Tool tool);
-    void setBrushDiameter(int value) { m_paint.setDiameter(value); m_clone.setDiameter(value); }
-    void setBrushHardness(int value) { m_paint.setHardness(value); m_clone.setHardness(value); }
-    void setBrushOpacity(int value) { m_paint.setOpacity(value); m_clone.setOpacity(value); }
+    void setBrushDiameter(int value) { m_paint.setDiameter(value); m_cloneTool.setDiameter(value); }
+    void setBrushHardness(int value) { m_paint.setHardness(value); m_cloneTool.setHardness(value); }
+    void setBrushOpacity(int value) { m_paint.setOpacity(value); m_cloneTool.setOpacity(value); }
     void setCloneAligned(bool aligned);
     void setBrushColor(const QColor &color) { m_paint.setColor(color); }
     void clearPainting();                  // 清除绘画层上的绘画内容
     void pasteClipboardImage();            // 把剪贴板图像作为浮动图像粘贴到画布
-    void rotateFloatingImage();            // 将当前浮动图像顺时针旋转 90°
-    void flipFloatingImageHorizontal();    // 将当前浮动图像水平翻转
-    void flipFloatingImageVertical();      // 将当前浮动图像垂直翻转
     void undo();                           // 撤销上一步操作
     void redo();                           // 重做被撤销的操作
 
@@ -82,6 +81,8 @@ private:
     void updateHoverCursor(const QPointF &imagePoint);  // 根据悬停位置更新鼠标光标形状
     // 清空一切进行中的交互状态（撤销/重做/Esc 取消后调用）
     void cancelInteraction();
+    void commitInteraction();
+    void updateImageTransform(const QPointF &point, Qt::KeyboardModifiers modifiers);
     // 把拖入的图像设置为新的浮动图像并提示
     void dropFloatingImage(const QImage &image, const QString &statusText);
     // 用当前 4 个创建角点生成平面；有效时追加到文档并进入编辑工具
@@ -90,41 +91,26 @@ private:
     void updateCloneMarker(const QPointF &point);
     int imageTransformHandleAt(const QPointF &point) const;
     int imageRotationCornerAt(const QPointF &point) const;
-    void rotateFloatingImageTo(const QPointF &point, bool snap);
-    void resizeFloatingImage(const QPointF &point, bool keepAspect, bool fromCenter);
 
+    enum class Gesture { Idle, Plane, Image, Brush, Clone };
+    Gesture m_gesture = Gesture::Idle;
+    bool drawing() const { return m_gesture == Gesture::Brush || m_gesture == Gesture::Clone; }
+    ImageTransformTool m_imageTool;
+    PlaneEditTool m_planeTool;
     CanvasDocument m_doc;                     // 文档模型（平面、绘画层、浮动图像、历史）
+    SceneContentCache m_contentCache;
     qreal m_antsPhase = 0;
     PaintEngine m_paint;                      // 笔刷引擎
-    CloneStampEngine m_clone;
-    bool m_cloneAligned = true;
-    bool m_hasCloneSource = false;
-    bool m_hasCloneOffset = false;
-    QTransform m_cloneSourceToCanvas, m_cloneTargetToCanvas;
-    QPointF m_cloneSource, m_cloneOffset, m_cloneMarker;
+    CloneTool m_cloneTool;
     QVector<QPointF> m_creationPoints;        // 创建平面过程中已点击的角点
     Tool m_tool = CreatePlane;                // 当前工具
     int m_dragHandle = -1;                    // 正在拖动的控制点索引
     int m_dragEdge = -1;                      // 正在拖动的边缘索引
-    bool m_dragging = false;                  // 正在拖动平面/控制点
-    bool m_drawing = false;                   // 正在绘制笔迹
-    bool m_extruding = false;                 // 正在从边缘拖出垂直平面
     int m_draggingImage = -1;                 // 正在拖动的浮动图像索引（-1 无）
-    int m_transformHandle = -1;
-    int m_transformFace = -1;
-    bool m_rotatingImage = false;
-    QPointF m_rotationPress;
-    QPointF m_transformGrabOffset;
-    QPointF m_pressImagePoint;                // 鼠标按下时的图像坐标
-    QPointF m_lastImagePoint;                 // 最近一次的图像坐标
-    Plane m_dragStartPlane;                   // 拖动开始时的平面快照
     Plane m_extrudePreview;                   // 垂直平面的拖出预览
     bool m_hasExtrudePreview = false;
     Facet m_brushFacet;                       // 画笔锁定的面片快照
-    int m_brushPlaneIndex = -1;               // 画笔锁定的平面索引
     int m_hoverPlane = -1;                    // 当前悬停的平面索引
-    FloatingImage m_imageDragStart;           // 图像拖动开始时的完整快照（Esc 取消恢复）
-    QPointF m_imageDragOffset;                // 抓取点相对图像左上角的偏移
     qreal m_scale = 1.0;                      // 视图缩放比例
     QPointF m_offset;                         // 视图居中偏移
     bool m_stateChanged = false;              // 自上次提交以来状态是否已变化

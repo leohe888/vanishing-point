@@ -1,7 +1,7 @@
 #include "scenerenderer.h"
 
 #include "canvasdocument.h"
-#include "floatingimagemath.h"
+#include "imagegeometry.h"
 
 #include <QFont>
 #include <QPainter>
@@ -9,54 +9,6 @@
 #include <QPainterPathStroker>
 
 using namespace PlaneMath;
-
-namespace {
-struct ImagePatch {
-    QTransform projection;
-    QPainterPath clip;
-};
-
-// 图片内容和蚂蚁线共用同一套裁剪、投影规则。
-QVector<ImagePatch> imagePatches(const FloatingImage &image)
-{
-    if (image.image.isNull())
-        return {};
-    QPainterPath imagePath;
-    imagePath.addRect(QRectF(QPointF(0, 0), QSizeF(image.image.size())));
-    if (!image.attached || image.faces.isEmpty()) {
-        return {{FloatingImageMath::imageToSpace(image), imagePath}};
-    }
-
-    QVector<QPolygonF> sources;
-    QVector<QPainterPath> clips;
-    QPainterPath hostClip = imagePath;
-    const QTransform spaceToImage = FloatingImageMath::imageToSpace(image).inverted();
-    for (int i = 0; i < image.faces.size(); ++i) {
-        QPolygonF source;
-        for (const QPointF &corner : image.faces[i].surfaceCorner)
-            source << spaceToImage.map(corner);
-        sources.append(source);
-        QPainterPath facePath;
-        facePath.addPolygon(source);
-        facePath.closeSubpath();
-        clips.append(imagePath.intersected(facePath));
-        if (i != image.hostFace)
-            hostClip = hostClip.subtracted(facePath);
-    }
-    QVector<ImagePatch> patches;
-    auto appendFace = [&](int i, const QPainterPath &clip) {
-        QTransform projection;
-        if (!clip.isEmpty() && QTransform::quadToQuad(sources[i], planePolygon(image.faces[i].corner), projection))
-            patches.append({projection, clip});
-    };
-    if (image.hostFace >= 0 && image.hostFace < image.faces.size())
-        appendFace(image.hostFace, hostClip);
-    for (int i = 0; i < image.faces.size(); ++i)
-        if (i != image.hostFace)
-            appendFace(i, clips[i]);
-    return patches;
-}
-}
 
 SceneRenderer::SceneRenderer(const CanvasDocument &doc)
     : m_doc(doc)
@@ -67,13 +19,14 @@ SceneRenderer::SceneRenderer(const CanvasDocument &doc)
 void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
                            const QVector<QPointF> &creationPoints,
                            const Plane *extrudePreview, bool editHandlesVisible,
-                           int hoveredPlane, qreal antsPhase)
+                           int hoveredPlane, qreal antsPhase, bool drawContent)
 {
     m_viewScale = qMax(viewScale, 1e-6);
 
     // 画布背景属于文档输出的一部分，总是被渲染。showGuides 标志
     // 只控制下方这些编辑器叠加层的绘制。
-    painter.drawImage(QPointF(0, 0), m_doc.background());
+    if (drawContent)
+        painter.drawImage(QPointF(0, 0), m_doc.background());
     if (showGuides && !m_doc.hasLoadedImage() && m_doc.planes().isEmpty() &&
         creationPoints.isEmpty()) {
         painter.save();
@@ -87,12 +40,13 @@ void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
     }
 
     // 绘画层：画笔笔触烘焙在画布同尺寸的透明层上，与平面几何完全无关。
-    if (!m_doc.paintLayer().isNull())
+    if (drawContent && !m_doc.paintLayer().isNull())
         painter.drawImage(QPointF(0, 0), m_doc.paintLayer());
 
     // 浮动图像：每张各自按吸附瞬间的几何快照渲染。
-    for (const FloatingImage &image : m_doc.images())
-        renderFloatingImage(painter, image);
+    if (drawContent)
+        for (const FloatingImage &image : m_doc.images())
+            renderFloatingImage(painter, image);
 
     if (!showGuides)
         return;
@@ -137,36 +91,24 @@ void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
 
 QPainterPath SceneRenderer::floatingImageOutline(const FloatingImage &image)
 {
-    const QVector<ImagePatch> patches = imagePatches(image);
-    if (patches.size() == 1)
-        return patches.first().projection.map(patches.first().clip);
-    QPainterPath outline;
-    QPainterPathStroker seamTolerance;
-    seamTolerance.setWidth(0.0001);
-    seamTolerance.setJoinStyle(Qt::MiterJoin);
-    for (const ImagePatch &patch : patches) {
-        const QPainterPath projected = patch.projection.map(patch.clip);
-        // 相邻单应矩阵在共享边上可能相差几个浮点尾数。
-        // 极小的亚像素容差将这些边合并，避免并集残留内部细缝。
-        outline = outline.united(projected.united(seamTolerance.createStroke(projected)));
-    }
-    return outline.simplified();
+    return ImageGeometry::get(image)->outline();
 }
 
 // 渲染一张浮动图像：未吸附时直接绘制；已吸附时按几何快照分段投影。
 void SceneRenderer::renderFloatingImage(QPainter &painter, const FloatingImage &image) const
 {
-    for (const ImagePatch &patch : imagePatches(image)) {
+    const auto geometry = ImageGeometry::get(image);
+    for (const ImagePatch &patch : geometry->patches()) {
         painter.save();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         // 在共同的画布坐标中裁剪，避免旋转后各面独立栅格化源裁剪路径
         // 时把共享边上的同一个像素同时排除。
-        const QPainterPath projectedClip = patch.projection.map(patch.clip);
+        const QPainterPath projectedClip = patch.canvasClip;
         QPainterPathStroker seamTolerance;
         seamTolerance.setWidth(.04 / qMax(m_viewScale, 1e-6));
         seamTolerance.setJoinStyle(Qt::MiterJoin);
         painter.setClipPath(projectedClip.united(seamTolerance.createStroke(projectedClip)), Qt::IntersectClip);
-        painter.setWorldTransform(patch.projection, true);
+        painter.setWorldTransform(patch.mapping.forward(), true);
         painter.drawImage(QPointF(0, 0), image.image);
         painter.restore();
     }

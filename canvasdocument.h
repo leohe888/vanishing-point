@@ -43,7 +43,8 @@ public:
 
     // —— 平面 ——
     const QVector<Plane> &planes() const { return m_planes; }
-    QVector<Plane> &planes() { return m_planes; }  // 直接修改后需手动 commitHistory()
+    int appendPlane(const Plane &plane);           // 几何预览修改由 beginEdit/commitEdit 包围
+    bool setPlane(int index, const Plane &plane);
     int selectedPlane() const { return m_selectedPlane; }
     void setSelectedPlane(int index) { m_selectedPlane = index; }
     int nextSurfaceGroupId() const;                // 分配一个新的展开曲面分组号
@@ -59,9 +60,8 @@ public:
 
     // —— 浮动图像 ——
     const QVector<FloatingImage> &images() const { return m_images; }
-    QVector<FloatingImage> &images() { return m_images; }
     const FloatingImage &image(int index) const { return m_images[index]; }
-    FloatingImage &image(int index) { return m_images[index]; }
+    bool setImage(int index, const FloatingImage &image);
     int selectedImage() const { return m_selectedImage; }
     void setSelectedImage(int index);
     int addFloatingImage(const QImage &image);     // 追加到左上角，返回索引
@@ -80,6 +80,11 @@ public:
     bool canRedo() const { return m_historyIndex + 1 < m_history.size(); }
     void resetHistory();                           // 清空历史并以当前状态为初始状态
     void commitHistory();                          // 提交一次状态变更到历史
+    // 交互事务只保存本次操作前的 COW 快照，历史仍使用绘画脏矩形增量。
+    void beginEdit();
+    void commitEdit(bool changed);
+    void cancelEdit();
+    bool editActive() const { return m_editActive; }
 
 signals:
     void imageSelectionChanged(bool selected);
@@ -118,4 +123,7 @@ private:
     // 重做分支，与主流编辑器的行为一致。
     QVector<HistoryEntry> m_history;    // 历史条目栈
     int m_historyIndex = -1;            // 当前状态在历史栈中的索引
+    bool m_editActive = false;
+    HistoryEntry m_editBefore;
+    QImage m_editPaintBefore;
 };

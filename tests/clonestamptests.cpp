@@ -133,7 +133,8 @@ private slots:
         QImage background(320, 200, QImage::Format_ARGB32_Premultiplied);
         background.fill(Qt::transparent);
         document.setBackground(background);
-        document.images().append(image);
+        document.addFloatingImage(image.image);
+        document.setImage(0, image);
         document.setSelectedImage(0);
         auto render = [&](bool guides, qreal phase) {
             QImage result = background.copy();
@@ -175,7 +176,7 @@ private slots:
         QVERIFY(!scaledOutline.contains(FloatingImageMath::toCanvas(scaled, QPointF(295, 98))));
         FloatingImage rotated = image;
         rotated.rotation = 17;
-        document.images()[0] = rotated;
+        document.setImage(0, rotated);
         const QPainterPath rotatedOutline = SceneRenderer::floatingImageOutline(rotated);
         const QPainterPath rotatedBorder = stroker.createStroke(rotatedOutline);
         const QImage rotatedContent = render(false, 0);
