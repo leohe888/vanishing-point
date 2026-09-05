@@ -52,13 +52,6 @@ void MainWindow::buildUi()
     auto *clearPaintAction = fileBar->addAction(tr("清除绘画"));
     clearPaintAction->setEnabled(false);
     saveAction->setEnabled(false);
-    fileBar->addSeparator();
-    auto *rotateAction = fileBar->addAction(tr("旋转 90°"));
-    auto *flipHAction = fileBar->addAction(tr("水平翻转"));
-    auto *flipVAction = fileBar->addAction(tr("垂直翻转"));
-    rotateAction->setEnabled(false);
-    flipHAction->setEnabled(false);
-    flipVAction->setEnabled(false);
 
     auto *root = new QWidget(this);
     auto *rootLayout = new QHBoxLayout(root);
@@ -217,11 +210,6 @@ void MainWindow::buildUi()
             QMessageBox::warning(this, tr("保存失败"), tr("无法写入目标文件。"));
     });
     connect(clearPaintAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::clearPainting);
-    connect(rotateAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::rotateFloatingImage);
-    connect(flipHAction, &QAction::triggered,
-            m_canvas, &PerspectiveCanvas::flipFloatingImageHorizontal);
-    connect(flipVAction, &QAction::triggered,
-            m_canvas, &PerspectiveCanvas::flipFloatingImageVertical);
     connect(undoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::undo);
     connect(redoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::redo);
     connect(m_canvas, &PerspectiveCanvas::canUndoChanged, undoAction, &QAction::setEnabled);
@@ -230,12 +218,9 @@ void MainWindow::buildUi()
         m_tools->button(PerspectiveCanvas::TransformTool)->setEnabled(selected);
     });
     connect(m_canvas, &PerspectiveCanvas::documentAvailabilityChanged, this,
-            [this, saveAction, clearPaintAction, rotateAction, flipHAction, flipVAction](bool available) {
+            [this, saveAction, clearPaintAction](bool available) {
                 saveAction->setEnabled(available);
                 clearPaintAction->setEnabled(available);
-                rotateAction->setEnabled(available);
-                flipHAction->setEnabled(available);
-                flipVAction->setEnabled(available);
                 for (QAbstractButton *button : m_tools->buttons())
                     button->setEnabled(available && (m_tools->id(button) != PerspectiveCanvas::TransformTool
                                                      || m_canvas->hasSelectedImage()));

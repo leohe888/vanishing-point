@@ -1,6 +1,7 @@
 #include "scenerenderer.h"
 
 #include "canvasdocument.h"
+#include "floatingimagemath.h"
 
 #include <QFont>
 #include <QPainter>
@@ -23,20 +24,17 @@ QVector<ImagePatch> imagePatches(const FloatingImage &image)
     QPainterPath imagePath;
     imagePath.addRect(QRectF(QPointF(0, 0), QSizeF(image.image.size())));
     if (!image.attached || image.faces.isEmpty()) {
-        QTransform projection;
-        projection.translate(image.position.x(), image.position.y());
-        projection.scale(image.scale.x(), image.scale.y());
-        return {{projection, imagePath}};
+        return {{FloatingImageMath::imageToSpace(image), imagePath}};
     }
 
     QVector<QPolygonF> sources;
     QVector<QPainterPath> clips;
     QPainterPath hostClip = imagePath;
+    const QTransform spaceToImage = FloatingImageMath::imageToSpace(image).inverted();
     for (int i = 0; i < image.faces.size(); ++i) {
         QPolygonF source;
         for (const QPointF &corner : image.faces[i].surfaceCorner)
-            source << QPointF((corner.x() - image.position.x()) / image.scale.x(),
-                              (corner.y() - image.position.y()) / image.scale.y());
+            source << spaceToImage.map(corner);
         sources.append(source);
         QPainterPath facePath;
         facePath.addPolygon(source);
@@ -161,10 +159,14 @@ void SceneRenderer::renderFloatingImage(QPainter &painter, const FloatingImage &
     for (const ImagePatch &patch : imagePatches(image)) {
         painter.save();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        // 在共同的画布坐标中裁剪，避免旋转后各面独立栅格化源裁剪路径
+        // 时把共享边上的同一个像素同时排除。
+        const QPainterPath projectedClip = patch.projection.map(patch.clip);
+        QPainterPathStroker seamTolerance;
+        seamTolerance.setWidth(.04 / qMax(m_viewScale, 1e-6));
+        seamTolerance.setJoinStyle(Qt::MiterJoin);
+        painter.setClipPath(projectedClip.united(seamTolerance.createStroke(projectedClip)), Qt::IntersectClip);
         painter.setWorldTransform(patch.projection, true);
-        // 裁剪路径表达在源图像坐标系中，因此要先把图像到画布的变换
-        // 安装到 QPainter，再传入该路径。
-        painter.setClipPath(patch.clip, Qt::IntersectClip);
         painter.drawImage(QPointF(0, 0), image.image);
         painter.restore();
     }

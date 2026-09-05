@@ -89,6 +89,8 @@ private:
     void beginClone(const QPointF &point, bool pickSource);
     void updateCloneMarker(const QPointF &point);
     int imageTransformHandleAt(const QPointF &point) const;
+    int imageRotationCornerAt(const QPointF &point) const;
+    void rotateFloatingImageTo(const QPointF &point, bool snap);
     void resizeFloatingImage(const QPointF &point, bool keepAspect, bool fromCenter);
 
     CanvasDocument m_doc;                     // 文档模型（平面、绘画层、浮动图像、历史）
@@ -110,6 +112,8 @@ private:
     int m_draggingImage = -1;                 // 正在拖动的浮动图像索引（-1 无）
     int m_transformHandle = -1;
     int m_transformFace = -1;
+    bool m_rotatingImage = false;
+    QPointF m_rotationPress;
     QPointF m_transformGrabOffset;
     QPointF m_pressImagePoint;                // 鼠标按下时的图像坐标
     QPointF m_lastImagePoint;                 // 最近一次的图像坐标

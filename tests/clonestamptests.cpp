@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
+#include <QAction>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPathStroker>
@@ -124,6 +125,24 @@ private slots:
         const QPainterPath scaledOutline = SceneRenderer::floatingImageOutline(scaled);
         QVERIFY(scaledOutline.contains(FloatingImageMath::toCanvas(scaled, QPointF(250, 80))));
         QVERIFY(!scaledOutline.contains(FloatingImageMath::toCanvas(scaled, QPointF(295, 98))));
+        FloatingImage rotated = image;
+        rotated.rotation = 17;
+        document.images()[0] = rotated;
+        const QPainterPath rotatedOutline = SceneRenderer::floatingImageOutline(rotated);
+        const QPainterPath rotatedBorder = stroker.createStroke(rotatedOutline);
+        const QImage rotatedContent = render(false, 0);
+        for (int y = 0; y < rotatedContent.height(); y += 3)
+            for (int x = 0; x < rotatedContent.width(); x += 3) {
+                const QPointF p(x + .5, y + .5);
+                if (!rotatedBorder.contains(p))
+                    QVERIFY2((qAlpha(rotatedContent.pixel(x, y)) > 0) == rotatedOutline.contains(p),
+                             qPrintable(QString("rotated pixel %1,%2").arg(x).arg(y)));
+            }
+        for (const QPointF &control : FloatingImageMath::controlPoints(rotated)) {
+            QPointF recovered;
+            QVERIFY(FloatingImageMath::fromCanvas(rotated, FloatingImageMath::toCanvas(rotated, control), &recovered));
+            QVERIFY(QLineF(recovered, control).length() < .001);
+        }
         image.hostFace = 1;
         QVERIFY(!stroker.createStroke(SceneRenderer::floatingImageOutline(image)).contains(QPointF(120, 80)));
         image.faces.resize(1);
@@ -157,6 +176,21 @@ private slots:
         const FloatingImage centered = FloatingImageMath::resized(image, 2, QPointF(130, 125), false, true);
         QCOMPARE(centered.displayedSize(), QSizeF(120, 110));
         QCOMPARE(centered.position, QPointF(10, 15));
+        const QPointF center = QRectF(image.position, image.displayedSize()).center();
+        const FloatingImage quarterTurn = FloatingImageMath::rotated(image, center + QPointF(50, 0), center + QPointF(0, 50), false);
+        QCOMPARE(quarterTurn.rotation, 90.0);
+        QCOMPARE(quarterTurn.image, image.image);
+        QCOMPARE(quarterTurn.position, image.position);
+        for (int handle = 0; handle < 8; ++handle) {
+            const auto rotatedControls = FloatingImageMath::controlPoints(quarterTurn);
+            const FloatingImage scaledRotated = FloatingImageMath::resized(quarterTurn, handle,
+                rotatedControls[handle] + QPointF(10, 15), false);
+            const int opposite = handle < 4 ? (handle + 2) % 4 : 4 + (handle - 4 + 2) % 4;
+            QVERIFY(QLineF(FloatingImageMath::controlPoints(scaledRotated)[opposite], rotatedControls[opposite]).length() < .001);
+            const FloatingImage centerScaled = FloatingImageMath::resized(quarterTurn, handle,
+                rotatedControls[handle] + QPointF(10, 15), true, true);
+            QVERIFY(QLineF(QRectF(centerScaled.position, centerScaled.displayedSize()).center(), center).length() < .001);
+        }
 
         QTemporaryDir dir;
         QVERIFY(gradient().save(dir.filePath("source.png")));
@@ -191,6 +225,26 @@ private slots:
         click(canvas, QPointF(350, 350));
         QVERIFY(!canvas.hasSelectedImage());
         click(canvas, QPointF(170, 110)); // 命中缩放后的范围，而非原位图范围
+        QVERIFY(canvas.hasSelectedImage());
+        canvas.setTool(PerspectiveCanvas::TransformTool);
+        mouse(canvas, QEvent::MouseMove, QPointF(190, 130), Qt::NoButton, Qt::NoButton);
+        QCOMPARE(canvas.cursor().shape(), Qt::BitmapCursor);
+        mouse(canvas, QEvent::MouseButtonPress, QPointF(190, 130), Qt::LeftButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseMove, QPointF(20, 160), Qt::NoButton, Qt::LeftButton, Qt::ShiftModifier);
+        mouse(canvas, QEvent::MouseButtonRelease, QPointF(20, 160), Qt::LeftButton, Qt::NoButton, Qt::ShiftModifier);
+        const QImage rotatedResult = exported();
+        QCOMPARE(rotatedResult.pixelColor(40, 140), QColor(Qt::red));
+        canvas.undo();
+        QCOMPARE(exported(), resized);
+        canvas.redo();
+        QCOMPARE(exported(), rotatedResult);
+        mouse(canvas, QEvent::MouseButtonPress, QPointF(20, 160), Qt::LeftButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseMove, QPointF(190, 130), Qt::NoButton, Qt::LeftButton);
+        QTest::keyClick(&canvas, Qt::Key_Escape);
+        mouse(canvas, QEvent::MouseButtonRelease, QPointF(190, 130), Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(exported(), rotatedResult);
+        click(canvas, QPointF(350, 350));
+        click(canvas, QPointF(40, 140));
         QVERIFY(canvas.hasSelectedImage());
     }
 
@@ -293,6 +347,10 @@ private slots:
         QVERIFY(gradient().save(dir.filePath("source.png")));
         MainWindow window;
         window.show();
+        for (auto *action : window.findChildren<QAction *>()) {
+            QVERIFY(!action->text().contains(QStringLiteral("旋转 90")));
+            QVERIFY(!action->text().contains(QStringLiteral("翻转")));
+        }
         QVERIFY(window.findChild<PerspectiveCanvas *>()->loadImage(dir.filePath("source.png")));
         window.activateWindow();
         QTest::qWait(30);

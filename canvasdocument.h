@@ -15,6 +15,7 @@ struct FloatingImage {
     QImage image;              // 位图
     QPointF position;          // 位置：未吸附=画布坐标；已吸附=展开曲面坐标
     QPointF scale = QPointF(1, 1); // 非破坏性缩放，保留原始位图
+    qreal rotation = 0; // 在画布/展开曲面中绕图片中心旋转，单位为度
     QSizeF displayedSize() const { return QSizeF(image.width() * scale.x(), image.height() * scale.y()); }
     bool attached = false;     // 是否已吸附到某个展开曲面
     QVector<Facet> faces;      // 吸附瞬间曲面分组的几何快照（严格快照）

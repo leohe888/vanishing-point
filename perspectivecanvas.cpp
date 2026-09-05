@@ -15,6 +15,34 @@
 #include <QPolygonF>
 #include <QResizeEvent>
 #include <QTimer>
+#include <QCursor>
+#include <QPixmap>
+
+namespace {
+const QCursor &rotationCursor()
+{
+    static const QCursor cursor = [] {
+        QPixmap pixmap(32, 32);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QPainterPath arrow;
+        arrow.arcMoveTo(QRectF(7, 7, 18, 18), 45);
+        arrow.arcTo(QRectF(7, 7, 18, 18), 45, 270);
+        arrow.moveTo(22, 23);
+        arrow.lineTo(22, 16);
+        arrow.moveTo(22, 23);
+        arrow.lineTo(15, 23);
+        painter.setPen(QPen(Qt::black, 4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPath(arrow);
+        painter.setPen(QPen(Qt::white, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPath(arrow);
+        painter.end();
+        return QCursor(pixmap, 16, 16);
+    }();
+    return cursor;
+}
+}
 
 using namespace PlaneMath;
 
@@ -235,6 +263,7 @@ void PerspectiveCanvas::redo()
 void PerspectiveCanvas::cancelInteraction()
 {
     m_transformHandle = m_transformFace = -1;
+    m_rotatingImage = false;
     m_clone.endStroke();
     if (!m_cloneAligned)
         m_hasCloneOffset = false;
@@ -271,7 +300,7 @@ void PerspectiveCanvas::setTool(Tool tool)
         tr("拖动控制点或平面；按住 Ctrl 从边缘拖出垂直于当前平面的平面"),
         tr("在平面内拖动进行透视绘画，笔触可延伸到平面之外"),
         tr("Alt+左键设置源点；在透视平面内拖动仿制。对齐时源点持续跟随光标"),
-        tr("拖动控制点缩放，Shift 保持比例，Alt 中心缩放，可组合使用；Esc 取消本次拖动")
+        tr("拖动控制点缩放，角点外侧拖动旋转；Shift 等比缩放/15°旋转，Alt 中心缩放；Esc 取消")
     };
     emit statusMessage(messages[tool]);
     update();
@@ -443,10 +472,11 @@ bool PerspectiveCanvas::floatingImageAt(const QPointF &canvasPoint, int *imageIn
         const FloatingImage &img = m_doc.images()[idx];
         if (img.image.isNull())
             continue;
-        const QRectF imageRect(QPointF(0, 0), img.displayedSize());
+        const QRectF imageRect(QPointF(0, 0), QSizeF(img.image.size()));
+        const QTransform spaceToImage = FloatingImageMath::imageToSpace(img).inverted();
         if (!img.attached || img.faces.isEmpty()) {
             const QPointF local = canvasPoint - img.position;
-            if (imageRect.contains(local)) {
+            if (imageRect.contains(spaceToImage.map(local + img.position))) {
                 if (imageIndex)
                     *imageIndex = idx;
                 if (imagePoint)
@@ -462,7 +492,7 @@ bool PerspectiveCanvas::floatingImageAt(const QPointF &canvasPoint, int *imageIn
                 continue;
             bool ok = false;
             const QPointF local = planeToSurface(face, canvasPoint, &ok) - img.position;
-            if (ok && imageRect.contains(local)) {
+            if (ok && imageRect.contains(spaceToImage.map(local + img.position))) {
                 if (imageIndex)
                     *imageIndex = idx;
                 if (imagePoint)
@@ -476,7 +506,7 @@ bool PerspectiveCanvas::floatingImageAt(const QPointF &canvasPoint, int *imageIn
             bool ok = false;
             const QPointF local = planeToSurface(img.faces[img.hostFace], canvasPoint, &ok) -
                                   img.position;
-            if (ok && imageRect.contains(local)) {
+            if (ok && imageRect.contains(spaceToImage.map(local + img.position))) {
                 if (imageIndex)
                     *imageIndex = idx;
                 if (imagePoint)
@@ -585,6 +615,31 @@ int PerspectiveCanvas::imageTransformHandleAt(const QPointF &point) const
     return -1;
 }
 
+int PerspectiveCanvas::imageRotationCornerAt(const QPointF &point) const
+{
+    if (m_tool != TransformTool || !hasSelectedImage())
+        return -1;
+    const FloatingImage &image = m_doc.image(m_doc.selectedImage());
+    const auto points = FloatingImageMath::controlPoints(image);
+    for (int i = 0; i < 4; ++i) {
+        const qreal distance = QLineF(point, FloatingImageMath::toCanvas(image, points[i])).length() * m_scale;
+        if (distance > 8 && distance <= 24 && !SceneRenderer::floatingImageOutline(image).contains(point))
+            return i;
+    }
+    return -1;
+}
+
+void PerspectiveCanvas::rotateFloatingImageTo(const QPointF &point, bool snap)
+{
+    QPointF surface;
+    if (!FloatingImageMath::fromCanvas(m_imageDragStart, point, &surface, m_transformFace))
+        return;
+    const FloatingImage image = FloatingImageMath::rotated(m_imageDragStart, m_rotationPress, surface, snap);
+    m_doc.image(m_draggingImage) = image;
+    m_stateChanged = image.rotation != m_imageDragStart.rotation;
+    update();
+}
+
 void PerspectiveCanvas::resizeFloatingImage(const QPointF &point, bool keepAspect, bool fromCenter)
 {
     QPointF surface;
@@ -608,6 +663,21 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     }
     const QPointF point = toImage(event->position());
     const int transformHandle = imageTransformHandleAt(point);
+    const int rotationCorner = transformHandle < 0 ? imageRotationCornerAt(point) : -1;
+    if (rotationCorner >= 0) {
+        m_draggingImage = m_doc.selectedImage();
+        m_imageDragStart = m_doc.image(m_draggingImage);
+        const QPointF control = FloatingImageMath::controlPoints(m_imageDragStart)[rotationCorner];
+        FloatingImageMath::toCanvas(m_imageDragStart, control, &m_transformFace);
+        if (!FloatingImageMath::fromCanvas(m_imageDragStart, point, &m_rotationPress, m_transformFace)) {
+            m_draggingImage = -1;
+            return;
+        }
+        m_rotatingImage = true;
+        m_stateChanged = false;
+        setCursor(rotationCursor());
+        return;
+    }
     if (transformHandle >= 0) {
         m_draggingImage = m_doc.selectedImage();
         m_imageDragStart = m_doc.image(m_draggingImage);
@@ -726,6 +796,10 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
+    if (m_rotatingImage && m_draggingImage >= 0 && (event->buttons() & Qt::LeftButton)) {
+        rotateFloatingImageTo(point, event->modifiers() & Qt::ShiftModifier);
+        return;
+    }
     if (m_transformHandle >= 0 && m_draggingImage >= 0 && (event->buttons() & Qt::LeftButton)) {
         resizeFloatingImage(point, event->modifiers() & Qt::ShiftModifier, event->modifiers() & Qt::AltModifier);
         return;
@@ -819,6 +893,10 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 // 根据悬停位置更新鼠标光标形状（抓手/十字/方向缩放等）
 void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
 {
+    if (imageRotationCornerAt(imagePoint) >= 0) {
+        setCursor(rotationCursor());
+        return;
+    }
     const int transformHandle = imageTransformHandleAt(imagePoint);
     if (transformHandle >= 0) {
         const FloatingImage &image = m_doc.image(m_doc.selectedImage());
@@ -888,6 +966,11 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+    if (m_rotatingImage && m_draggingImage >= 0) {
+        rotateFloatingImageTo(toImage(event->position()), event->modifiers() & Qt::ShiftModifier);
+        m_rotatingImage = false;
+        m_transformFace = -1;
+    }
     if (m_transformHandle >= 0 && m_draggingImage >= 0) {
         resizeFloatingImage(toImage(event->position()), event->modifiers() & Qt::ShiftModifier,
                             event->modifiers() & Qt::AltModifier);
