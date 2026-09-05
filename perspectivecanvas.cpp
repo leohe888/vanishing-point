@@ -13,6 +13,7 @@
 #include <QPainter>
 #include <QPolygonF>
 #include <QResizeEvent>
+#include <QTimer>
 
 using namespace PlaneMath;
 
@@ -23,6 +24,15 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
     setFocusPolicy(Qt::StrongFocus);
     setAcceptDrops(true);
     setMinimumSize(500, 400);
+    auto *antsTimer = new QTimer(this);
+    antsTimer->setInterval(80);
+    connect(antsTimer, &QTimer::timeout, this, [this] {
+        if (isVisible() && m_doc.selectedImage() >= 0 && m_doc.selectedImage() < m_doc.images().size()) {
+            m_antsPhase = int(m_antsPhase + 1) % 8;
+            update();
+        }
+    });
+    antsTimer->start();
 
     QImage background(1200, 800, QImage::Format_ARGB32);
     QPainter p(&background);
@@ -291,7 +301,7 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
     SceneRenderer renderer(m_doc);
     renderer.render(painter, m_scale, true, m_creationPoints,
                     m_hasExtrudePreview ? &m_extrudePreview : nullptr,
-                    m_tool == EditPlane, m_hoverPlane);
+                    m_tool == EditPlane, m_hoverPlane, m_antsPhase);
     if (m_tool == CloneStampTool && m_hasCloneSource) {
         painter.resetTransform();
         const QPointF center = toWidget(m_cloneMarker);
@@ -541,7 +551,15 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
         return;
     }
     const QPointF point = toImage(event->position());
-    if (!m_doc.background().rect().contains(point.toPoint()))
+    const bool insideCanvas = m_doc.background().rect().contains(point.toPoint());
+    QPointF grabbedImagePoint;
+    int grabbedImage = -1;
+    const bool hitImage = insideCanvas && floatingImageAt(point, &grabbedImage, &grabbedImagePoint);
+    if (!hitImage && m_doc.selectedImage() >= 0) {
+        m_doc.setSelectedImage(-1);
+        update();
+    }
+    if (!insideCanvas)
         return;
 
     if (m_tool == CloneStampTool) {
@@ -549,15 +567,14 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
         return;
     }
 
-    QPointF grabbedImagePoint;
-    int grabbedImage = -1;
-    if (floatingImageAt(point, &grabbedImage, &grabbedImagePoint)) {
+    if (hitImage) {
         m_draggingImage = grabbedImage;
         m_doc.setSelectedImage(grabbedImage);
         m_imageDragStart = m_doc.image(grabbedImage);
         m_imageDragOffset = grabbedImagePoint;
         m_stateChanged = false;
         setCursor(Qt::ClosedHandCursor);
+        update();
         return;
     }
 

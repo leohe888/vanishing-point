@@ -5,8 +5,55 @@
 #include <QFont>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPainterPathStroker>
 
 using namespace PlaneMath;
+
+namespace {
+struct ImagePatch {
+    QTransform projection;
+    QPainterPath clip;
+};
+
+// 图片内容和蚂蚁线共用同一套裁剪、投影规则。
+QVector<ImagePatch> imagePatches(const FloatingImage &image)
+{
+    if (image.image.isNull())
+        return {};
+    QPainterPath imagePath;
+    imagePath.addRect(QRectF(QPointF(0, 0), QSizeF(image.image.size())));
+    if (!image.attached || image.faces.isEmpty())
+        return {{QTransform::fromTranslate(image.position.x(), image.position.y()), imagePath}};
+
+    QVector<QPolygonF> sources;
+    QVector<QPainterPath> clips;
+    QPainterPath hostClip = imagePath;
+    for (int i = 0; i < image.faces.size(); ++i) {
+        QPolygonF source;
+        for (const QPointF &corner : image.faces[i].surfaceCorner)
+            source << corner - image.position;
+        sources.append(source);
+        QPainterPath facePath;
+        facePath.addPolygon(source);
+        facePath.closeSubpath();
+        clips.append(imagePath.intersected(facePath));
+        if (i != image.hostFace)
+            hostClip = hostClip.subtracted(facePath);
+    }
+    QVector<ImagePatch> patches;
+    auto appendFace = [&](int i, const QPainterPath &clip) {
+        QTransform projection;
+        if (!clip.isEmpty() && QTransform::quadToQuad(sources[i], planePolygon(image.faces[i].corner), projection))
+            patches.append({projection, clip});
+    };
+    if (image.hostFace >= 0 && image.hostFace < image.faces.size())
+        appendFace(image.hostFace, hostClip);
+    for (int i = 0; i < image.faces.size(); ++i)
+        if (i != image.hostFace)
+            appendFace(i, clips[i]);
+    return patches;
+}
+}
 
 SceneRenderer::SceneRenderer(const CanvasDocument &doc)
     : m_doc(doc)
@@ -17,7 +64,7 @@ SceneRenderer::SceneRenderer(const CanvasDocument &doc)
 void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
                            const QVector<QPointF> &creationPoints,
                            const Plane *extrudePreview, bool editHandlesVisible,
-                           int hoveredPlane)
+                           int hoveredPlane, qreal antsPhase)
 {
     m_viewScale = qMax(viewScale, 1e-6);
 
@@ -63,66 +110,58 @@ void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
             painter.drawLine(creationPoints[i - 1], point);
     }
     painter.restore();
+
+    // 在屏幕坐标中描边，透视和缩放只改变轮廓，不改变线宽、虚线长度和速度。
+    painter.save();
+    const QTransform view = painter.worldTransform();
+    painter.resetTransform();
+    painter.setBrush(Qt::NoBrush);
+    const int selectedImage = m_doc.selectedImage();
+    if (selectedImage >= 0 && selectedImage < m_doc.images().size()) {
+        const QPainterPath outline = view.map(floatingImageOutline(m_doc.image(selectedImage)));
+        QPen pen(Qt::white, 1);
+        pen.setJoinStyle(Qt::MiterJoin);
+        painter.setPen(pen);
+        painter.drawPath(outline);
+        pen.setColor(Qt::black);
+        pen.setDashPattern({4, 4});
+        pen.setDashOffset(antsPhase);
+        painter.setPen(pen);
+        painter.drawPath(outline);
+    }
+    painter.restore();
+}
+
+QPainterPath SceneRenderer::floatingImageOutline(const FloatingImage &image)
+{
+    const QVector<ImagePatch> patches = imagePatches(image);
+    if (patches.size() == 1)
+        return patches.first().projection.map(patches.first().clip);
+    QPainterPath outline;
+    QPainterPathStroker seamTolerance;
+    seamTolerance.setWidth(0.0001);
+    seamTolerance.setJoinStyle(Qt::MiterJoin);
+    for (const ImagePatch &patch : patches) {
+        const QPainterPath projected = patch.projection.map(patch.clip);
+        // 相邻单应矩阵在共享边上可能相差几个浮点尾数。
+        // 极小的亚像素容差将这些边合并，避免并集残留内部细缝。
+        outline = outline.united(projected.united(seamTolerance.createStroke(projected)));
+    }
+    return outline.simplified();
 }
 
 // 渲染一张浮动图像：未吸附时直接绘制；已吸附时按几何快照分段投影。
 void SceneRenderer::renderFloatingImage(QPainter &painter, const FloatingImage &image) const
 {
-    if (image.image.isNull())
-        return;
-    if (!image.attached || image.faces.isEmpty()) {
-        painter.drawImage(image.position, image.image);
-        return;
-    }
-
-    const QRectF imageRect(QPointF(0, 0), QSizeF(image.image.size()));
-    QPainterPath hostClip;
-    hostClip.addRect(imageRect);
-
-    // 图像位置处于展开曲面坐标系，减掉它即得到图像局部坐标。
-    auto sourcePolygon = [&image](const Facet &face) {
-        QPolygonF polygon;
-        for (const QPointF &corner : face.surfaceCorner)
-            polygon << (corner - image.position);
-        return polygon;
-    };
-    auto polygonPath = [](const QPolygonF &polygon) {
-        QPainterPath path;
-        path.addPolygon(polygon);
-        path.closeSubpath();
-        return path;
-    };
-
-    // 先从宿主投影中减去属于其他面的像素，再用那个面的单应变换重绘，
-    // 这样接缝处不会出现重影，同时图像仍可延伸到有限网格之外。
-    for (int i = 0; i < image.faces.size(); ++i) {
-        if (i == image.hostFace)
-            continue;
-        hostClip = hostClip.subtracted(polygonPath(sourcePolygon(image.faces[i])));
-    }
-
-    auto drawFace = [&painter, &image, &sourcePolygon](const Facet &face,
-                                                       const QPainterPath &clip) {
-        const QPolygonF source = sourcePolygon(face);
-        QTransform projection;
-        if (!QTransform::quadToQuad(source, planePolygon(face.corner), projection))
-            return;
+    for (const ImagePatch &patch : imagePatches(image)) {
         painter.save();
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        painter.setWorldTransform(projection, true);
+        painter.setWorldTransform(patch.projection, true);
         // 裁剪路径表达在源图像坐标系中，因此要先把图像到画布的变换
         // 安装到 QPainter，再传入该路径。
-        painter.setClipPath(clip, Qt::IntersectClip);
+        painter.setClipPath(patch.clip, Qt::IntersectClip);
         painter.drawImage(QPointF(0, 0), image.image);
         painter.restore();
-    };
-
-    if (image.hostFace >= 0 && image.hostFace < image.faces.size())
-        drawFace(image.faces[image.hostFace], hostClip);
-    for (int i = 0; i < image.faces.size(); ++i) {
-        if (i == image.hostFace)
-            continue;
-        drawFace(image.faces[i], polygonPath(sourcePolygon(image.faces[i])));
     }
 }
 

@@ -88,6 +88,7 @@ private:
     void updateCloneMarker(const QPointF &point);
 
     CanvasDocument m_doc;                     // 文档模型（平面、绘画层、浮动图像、历史）
+    qreal m_antsPhase = 0;
     PaintEngine m_paint;                      // 笔刷引擎
     CloneStampEngine m_clone;
     bool m_cloneAligned = true;

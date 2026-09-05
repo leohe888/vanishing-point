@@ -1,10 +1,13 @@
 #include "clonestampengine.h"
 #include "perspectivecanvas.h"
 #include "mainwindow.h"
+#include "scenerenderer.h"
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPathStroker>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
@@ -41,6 +44,77 @@ private:
     }
 
 private slots:
+    void floatingImageOutlineAcrossPlanes()
+    {
+        FloatingImage image;
+        image.image = QImage(240, 60, QImage::Format_ARGB32_Premultiplied);
+        image.image.fill(QColor(170, 80, 60));
+        image.position = QPointF(30, 20);
+        QCOMPARE(SceneRenderer::floatingImageOutline(image).boundingRect(), QRectF(30, 20, 240, 60));
+        image.attached = true;
+        image.hostFace = 0;
+        const QVector<QPolygonF> corners{
+            {QPointF(20, 30), QPointF(120, 30), QPointF(120, 130), QPointF(20, 130)},
+            {QPointF(120, 30), QPointF(200, 50), QPointF(190, 120), QPointF(120, 130)},
+            {QPointF(200, 50), QPointF(260, 20), QPointF(250, 150), QPointF(190, 120)}
+        };
+        for (int i = 0; i < corners.size(); ++i) {
+            Facet face;
+            const QPolygonF surface{QPointF(i * 100, 0), QPointF((i + 1) * 100, 0),
+                                    QPointF((i + 1) * 100, 100), QPointF(i * 100, 100)};
+            for (int j = 0; j < 4; ++j) {
+                face.corner[j] = corners[i][j];
+                face.surfaceCorner[j] = surface[j];
+            }
+            image.faces.append(face);
+        }
+        const QPainterPath outline = SceneRenderer::floatingImageOutline(image);
+        QPainterPathStroker stroker;
+        stroker.setWidth(1);
+        const QPainterPath border = stroker.createStroke(outline);
+        for (const QPointF &seam : {QPointF(120, 80), QPointF(195, 85)}) {
+            QVERIFY2(outline.contains(seam), qPrintable(QString("seam %1,%2; outline %3 elements")
+                .arg(seam.x()).arg(seam.y()).arg(outline.elementCount())));
+            QVERIFY(!border.intersects(QRectF(seam - QPointF(2, 2), QSizeF(4, 4))));
+        }
+
+        CanvasDocument document;
+        QImage background(320, 200, QImage::Format_ARGB32_Premultiplied);
+        background.fill(Qt::transparent);
+        document.setBackground(background);
+        document.images().append(image);
+        document.setSelectedImage(0);
+        auto render = [&](bool guides, qreal phase) {
+            QImage result = background.copy();
+            QPainter painter(&result);
+            SceneRenderer(document).render(painter, 1, guides, {}, nullptr, false, -1, phase);
+            painter.end();
+            return result;
+        };
+        const QImage content = render(false, 0);
+        // 用实际渲染的像素验证三个平面上的外轮廓，边缘抗锯齿区域除外。
+        for (int y = 0; y < content.height(); y += 3)
+            for (int x = 0; x < content.width(); x += 3) {
+                const QPointF point(x + .5, y + .5);
+                if (!border.contains(point))
+                    QCOMPARE(qAlpha(content.pixel(x, y)) > 0, outline.contains(point));
+            }
+        QVERIFY(render(true, 0) != render(true, 3));
+        QCOMPARE(render(false, 0), render(false, 3));
+        document.setSelectedImage(-1);
+        QCOMPARE(render(true, 0), render(true, 3));
+
+        // 宿主平面外的图片仍有轮廓；切换宿主后接缝也不能变成边框。
+        image.position = QPointF(-20, 20);
+        QVERIFY(SceneRenderer::floatingImageOutline(image).contains(QPointF(5, 80)));
+        image.position = QPointF(30, 20);
+        image.hostFace = 1;
+        QVERIFY(!stroker.createStroke(SceneRenderer::floatingImageOutline(image)).contains(QPointF(120, 80)));
+        image.faces.resize(1);
+        image.hostFace = 0;
+        QCOMPARE(SceneRenderer::floatingImageOutline(image).boundingRect(), QRectF(50, 50, 240, 60));
+    }
+
     void perspectiveSampling()
     {
         CloneStampEngine engine;

@@ -3,6 +3,7 @@
 #include "planemath.h"
 
 #include <QVector>
+#include <QPainterPath>
 
 class QPainter;
 class CanvasDocument;
@@ -29,7 +30,10 @@ public:
                 const QVector<QPointF> &creationPoints = {},
                 const Plane *extrudePreview = nullptr,
                 bool editHandlesVisible = false,
-                int hoveredPlane = -1);
+                int hoveredPlane = -1, qreal antsPhase = 0);
+
+    // 各投影片段的并集外轮廓，不包含平面之间的内部接缝。
+    static QPainterPath floatingImageOutline(const FloatingImage &image);
 
 private:
     // 渲染一张浮动图像：未吸附时直接绘制；已吸附时按几何快照分段投影，
