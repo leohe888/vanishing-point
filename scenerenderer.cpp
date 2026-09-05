@@ -22,8 +22,12 @@ QVector<ImagePatch> imagePatches(const FloatingImage &image)
         return {};
     QPainterPath imagePath;
     imagePath.addRect(QRectF(QPointF(0, 0), QSizeF(image.image.size())));
-    if (!image.attached || image.faces.isEmpty())
-        return {{QTransform::fromTranslate(image.position.x(), image.position.y()), imagePath}};
+    if (!image.attached || image.faces.isEmpty()) {
+        QTransform projection;
+        projection.translate(image.position.x(), image.position.y());
+        projection.scale(image.scale.x(), image.scale.y());
+        return {{projection, imagePath}};
+    }
 
     QVector<QPolygonF> sources;
     QVector<QPainterPath> clips;
@@ -31,7 +35,8 @@ QVector<ImagePatch> imagePatches(const FloatingImage &image)
     for (int i = 0; i < image.faces.size(); ++i) {
         QPolygonF source;
         for (const QPointF &corner : image.faces[i].surfaceCorner)
-            source << corner - image.position;
+            source << QPointF((corner.x() - image.position.x()) / image.scale.x(),
+                              (corner.y() - image.position.y()) / image.scale.y());
         sources.append(source);
         QPainterPath facePath;
         facePath.addPolygon(source);

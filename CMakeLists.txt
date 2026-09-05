@@ -25,6 +25,8 @@ qt_add_executable(VanisingPoint
     clonestampengine.h
     scenerenderer.cpp
     scenerenderer.h
+    floatingimagemath.cpp
+    floatingimagemath.h
     perspectivecanvas.cpp
     perspectivecanvas.h
 )
@@ -43,7 +45,7 @@ if(VP_BUILD_TESTS)
     qt_add_executable(CloneStampTests
         tests/clonestamptests.cpp
         clonestampengine.cpp paintengine.cpp planemath.cpp
-        canvasdocument.cpp scenerenderer.cpp perspectivecanvas.cpp mainwindow.cpp
+        canvasdocument.cpp scenerenderer.cpp floatingimagemath.cpp perspectivecanvas.cpp mainwindow.cpp
     )
     target_include_directories(CloneStampTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(CloneStampTests PRIVATE Qt::Widgets Qt::Test)

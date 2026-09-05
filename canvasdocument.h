@@ -14,6 +14,8 @@
 struct FloatingImage {
     QImage image;              // 位图
     QPointF position;          // 位置：未吸附=画布坐标；已吸附=展开曲面坐标
+    QPointF scale = QPointF(1, 1); // 非破坏性缩放，保留原始位图
+    QSizeF displayedSize() const { return QSizeF(image.width() * scale.x(), image.height() * scale.y()); }
     bool attached = false;     // 是否已吸附到某个展开曲面
     QVector<Facet> faces;      // 吸附瞬间曲面分组的几何快照（严格快照）
     int hostFace = -1;         // 宿主面在 faces 中的索引（-1 表示无）
@@ -60,7 +62,7 @@ public:
     const FloatingImage &image(int index) const { return m_images[index]; }
     FloatingImage &image(int index) { return m_images[index]; }
     int selectedImage() const { return m_selectedImage; }
-    void setSelectedImage(int index) { m_selectedImage = index; }
+    void setSelectedImage(int index);
     int addFloatingImage(const QImage &image);     // 追加到左上角，返回索引
     void setImagePosition(int index, const QPointF &position); // 仅移动位置
     // 把图像吸附到一组几何快照上（surfacePosition 为展开曲面坐标）
@@ -79,6 +81,7 @@ public:
     void commitHistory();                          // 提交一次状态变更到历史
 
 signals:
+    void imageSelectionChanged(bool selected);
     void canUndoChanged(bool available);           // 撤销可用性变化
     void canRedoChanged(bool available);           // 重做可用性变化
     void documentAvailabilityChanged(bool available); // 文档加载状态变化

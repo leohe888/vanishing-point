@@ -77,7 +77,7 @@ void MainWindow::buildUi()
     m_tools = new QButtonGroup(this);
     m_tools->setExclusive(true);
     const QStringList toolNames{tr("创建平面  (C)"), tr("编辑平面  (V)"),
-                                tr("画笔工具  (B)"), tr("图章工具  (S)")};
+                                tr("画笔工具  (B)"), tr("图章工具  (S)"), tr("变换工具  (T)")};
     for (int i = 0; i < toolNames.size(); ++i) {
         auto *button = new QToolButton(side);
         button->setText(toolNames[i]);
@@ -190,7 +190,7 @@ void MainWindow::buildUi()
                     button->click();
             });
     const QList<QKeySequence> shortcuts{QKeySequence("C"), QKeySequence("V"),
-                                        QKeySequence("B"), QKeySequence("S")};
+                                        QKeySequence("B"), QKeySequence("S"), QKeySequence("T")};
     for (int i = 0; i < shortcuts.size(); ++i) {
         auto *shortcut = new QShortcut(shortcuts[i], this);
         connect(shortcut, &QShortcut::activated, m_tools->button(i), &QAbstractButton::click);
@@ -226,6 +226,9 @@ void MainWindow::buildUi()
     connect(redoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::redo);
     connect(m_canvas, &PerspectiveCanvas::canUndoChanged, undoAction, &QAction::setEnabled);
     connect(m_canvas, &PerspectiveCanvas::canRedoChanged, redoAction, &QAction::setEnabled);
+    connect(m_canvas, &PerspectiveCanvas::imageSelectionChanged, this, [this](bool selected) {
+        m_tools->button(PerspectiveCanvas::TransformTool)->setEnabled(selected);
+    });
     connect(m_canvas, &PerspectiveCanvas::documentAvailabilityChanged, this,
             [this, saveAction, clearPaintAction, rotateAction, flipHAction, flipVAction](bool available) {
                 saveAction->setEnabled(available);
@@ -234,7 +237,8 @@ void MainWindow::buildUi()
                 flipHAction->setEnabled(available);
                 flipVAction->setEnabled(available);
                 for (QAbstractButton *button : m_tools->buttons())
-                    button->setEnabled(available);
+                    button->setEnabled(available && (m_tools->id(button) != PerspectiveCanvas::TransformTool
+                                                     || m_canvas->hasSelectedImage()));
             });
     connect(m_canvas, &PerspectiveCanvas::statusMessage, statusBar(), &QStatusBar::showMessage);
     updateToolOptions(PerspectiveCanvas::CreatePlane);

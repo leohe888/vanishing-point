@@ -2,9 +2,11 @@
 #include "perspectivecanvas.h"
 #include "mainwindow.h"
 #include "scenerenderer.h"
+#include "floatingimagemath.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPathStroker>
@@ -108,11 +110,88 @@ private slots:
         image.position = QPointF(-20, 20);
         QVERIFY(SceneRenderer::floatingImageOutline(image).contains(QPointF(5, 80)));
         image.position = QPointF(30, 20);
+        const auto controls = FloatingImageMath::controlPoints(image);
+        QCOMPARE(controls.size(), 8);
+        for (const QPointF &control : controls) {
+            const QPointF canvasPoint = FloatingImageMath::toCanvas(image, control);
+            QPointF recovered;
+            QVERIFY(FloatingImageMath::fromCanvas(image, canvasPoint, &recovered));
+            QVERIFY(QLineF(control, recovered).length() < .001);
+        }
+        const FloatingImage scaled = FloatingImageMath::resized(image, 2, QPointF(290, 95), false);
+        QCOMPARE(scaled.displayedSize(), QSizeF(260, 75));
+        QCOMPARE(scaled.image, image.image);
+        const QPainterPath scaledOutline = SceneRenderer::floatingImageOutline(scaled);
+        QVERIFY(scaledOutline.contains(FloatingImageMath::toCanvas(scaled, QPointF(250, 80))));
+        QVERIFY(!scaledOutline.contains(FloatingImageMath::toCanvas(scaled, QPointF(295, 98))));
         image.hostFace = 1;
         QVERIFY(!stroker.createStroke(SceneRenderer::floatingImageOutline(image)).contains(QPointF(120, 80)));
         image.faces.resize(1);
         image.hostFace = 0;
         QCOMPARE(SceneRenderer::floatingImageOutline(image).boundingRect(), QRectF(50, 50, 240, 60));
+    }
+
+    void transformHandlesAndHistory()
+    {
+        FloatingImage image;
+        image.image = QImage(100, 80, QImage::Format_ARGB32);
+        image.image.fill(Qt::red);
+        image.position = QPointF(20, 30);
+        const auto controls = FloatingImageMath::controlPoints(image);
+        for (int handle = 0; handle < 8; ++handle) {
+            const FloatingImage resized = FloatingImageMath::resized(image, handle, controls[handle] + QPointF(10, 15), false);
+            const auto result = FloatingImageMath::controlPoints(resized);
+            const int opposite = handle < 4 ? (handle + 2) % 4 : 4 + (handle - 4 + 2) % 4;
+            QCOMPARE(result[opposite], controls[opposite]);
+            for (bool keepAspect : {false, true}) {
+                const FloatingImage centered = FloatingImageMath::resized(image, handle,
+                    controls[handle] + QPointF(10, 15), keepAspect, true);
+                QCOMPARE(QRectF(centered.position, centered.displayedSize()).center(),
+                         QRectF(image.position, image.displayedSize()).center());
+                if (keepAspect)
+                    QCOMPARE(centered.displayedSize().width() / centered.displayedSize().height(), 1.25);
+            }
+        }
+        const FloatingImage proportional = FloatingImageMath::resized(image, 2, QPointF(220, 140), true);
+        QCOMPARE(proportional.displayedSize().width() / proportional.displayedSize().height(), 1.25);
+        const FloatingImage centered = FloatingImageMath::resized(image, 2, QPointF(130, 125), false, true);
+        QCOMPARE(centered.displayedSize(), QSizeF(120, 110));
+        QCOMPARE(centered.position, QPointF(10, 15));
+
+        QTemporaryDir dir;
+        QVERIFY(gradient().save(dir.filePath("source.png")));
+        PerspectiveCanvas canvas;
+        canvas.resize(500, 500);
+        canvas.show();
+        QVERIFY(canvas.loadImage(dir.filePath("source.png")));
+        QApplication::clipboard()->setImage(image.image);
+        canvas.pasteClipboardImage();
+        QVERIFY(canvas.hasSelectedImage());
+        canvas.setTool(PerspectiveCanvas::TransformTool);
+        auto exported = [&]() {
+            canvas.saveResult(dir.filePath("result.png"));
+            return QImage(dir.filePath("result.png"));
+        };
+        const QImage original = exported();
+        mouse(canvas, QEvent::MouseButtonPress, QPointF(100, 80), Qt::LeftButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseMove, QPointF(180, 120), Qt::NoButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseButtonRelease, QPointF(180, 120), Qt::LeftButton, Qt::NoButton);
+        const QImage resized = exported();
+        QCOMPARE(resized.pixelColor(170, 110), QColor(Qt::red));
+        QVERIFY(resized != original);
+        canvas.undo();
+        QCOMPARE(exported(), original);
+        canvas.redo();
+        QCOMPARE(exported(), resized);
+        mouse(canvas, QEvent::MouseButtonPress, QPointF(180, 120), Qt::LeftButton, Qt::LeftButton);
+        mouse(canvas, QEvent::MouseMove, QPointF(260, 200), Qt::NoButton, Qt::LeftButton);
+        QTest::keyClick(&canvas, Qt::Key_Escape);
+        mouse(canvas, QEvent::MouseButtonRelease, QPointF(260, 200), Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(exported(), resized);
+        click(canvas, QPointF(350, 350));
+        QVERIFY(!canvas.hasSelectedImage());
+        click(canvas, QPointF(170, 110)); // 命中缩放后的范围，而非原位图范围
+        QVERIFY(canvas.hasSelectedImage());
     }
 
     void perspectiveSampling()
@@ -225,6 +304,23 @@ private slots:
         QVERIFY(selected);
         QVERIFY(window.findChild<QCheckBox *>()->isVisible());
         QVERIFY(window.findChild<QCheckBox *>()->isChecked());
+        QToolButton *transform = nullptr;
+        for (auto *button : window.findChildren<QToolButton *>())
+            if (button->text().contains("(T)"))
+                transform = button;
+        QVERIFY(transform);
+        QVERIFY(!transform->isEnabled());
+        QImage floating(60, 40, QImage::Format_ARGB32);
+        floating.fill(Qt::red);
+        QApplication::clipboard()->setImage(floating);
+        auto *canvas = window.findChild<PerspectiveCanvas *>();
+        canvas->pasteClipboardImage();
+        QVERIFY(transform->isEnabled());
+        QTest::keyClick(&window, Qt::Key_T);
+        QVERIFY(transform->isChecked());
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(canvas->width() - 1, canvas->height() - 1));
+        QVERIFY(!transform->isEnabled());
+        QVERIFY(!transform->isChecked());
     }
 };
 

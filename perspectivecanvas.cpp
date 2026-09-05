@@ -1,6 +1,7 @@
 #include "perspectivecanvas.h"
 
 #include "scenerenderer.h"
+#include "floatingimagemath.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -47,6 +48,15 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
             this, &PerspectiveCanvas::canRedoChanged);
     connect(&m_doc, &CanvasDocument::documentAvailabilityChanged,
             this, &PerspectiveCanvas::documentAvailabilityChanged);
+    connect(&m_doc, &CanvasDocument::imageSelectionChanged, this, [this](bool selected) {
+        if (!selected && m_tool == TransformTool) {
+            cancelInteraction();
+            setTool(EditPlane);
+            emit toolChangeRequested(EditPlane);
+        }
+        emit imageSelectionChanged(selected);
+        update();
+    });
 }
 
 // 从文件加载背景图像，并清空交互状态与视图变换
@@ -200,6 +210,10 @@ void PerspectiveCanvas::flipFloatingImageVertical()
 // 撤销：回退到上一份状态并清空进行中的交互
 void PerspectiveCanvas::undo()
 {
+    if (m_draggingImage >= 0 && m_stateChanged)
+        m_doc.commitHistory();
+    if (m_draggingImage >= 0)
+        cancelInteraction();
     if (m_drawing && m_stateChanged)
         m_doc.commitHistory();
     if (!m_doc.undo())
@@ -220,6 +234,7 @@ void PerspectiveCanvas::redo()
 // 清空一切进行中的交互状态（撤销/重做/Esc 取消后调用）
 void PerspectiveCanvas::cancelInteraction()
 {
+    m_transformHandle = m_transformFace = -1;
     m_clone.endStroke();
     if (!m_cloneAligned)
         m_hasCloneOffset = false;
@@ -238,6 +253,10 @@ void PerspectiveCanvas::cancelInteraction()
 // 切换当前工具，并清理进行中的交互状态、更新光标与提示
 void PerspectiveCanvas::setTool(Tool tool)
 {
+    if (tool == TransformTool && !hasSelectedImage())
+        return;
+    if (m_draggingImage >= 0 && m_stateChanged)
+        m_doc.commitHistory();
     if (m_drawing && m_stateChanged)
         m_doc.commitHistory();
     cancelInteraction();
@@ -251,7 +270,8 @@ void PerspectiveCanvas::setTool(Tool tool)
         tr("依次单击四个角点以创建平面"),
         tr("拖动控制点或平面；按住 Ctrl 从边缘拖出垂直于当前平面的平面"),
         tr("在平面内拖动进行透视绘画，笔触可延伸到平面之外"),
-        tr("Alt+左键设置源点；在透视平面内拖动仿制。对齐时源点持续跟随光标")
+        tr("Alt+左键设置源点；在透视平面内拖动仿制。对齐时源点持续跟随光标"),
+        tr("拖动控制点缩放，Shift 保持比例，Alt 中心缩放，可组合使用；Esc 取消本次拖动")
     };
     emit statusMessage(messages[tool]);
     update();
@@ -302,6 +322,18 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
     renderer.render(painter, m_scale, true, m_creationPoints,
                     m_hasExtrudePreview ? &m_extrudePreview : nullptr,
                     m_tool == EditPlane, m_hoverPlane, m_antsPhase);
+    if (m_tool == TransformTool && hasSelectedImage()) {
+        const FloatingImage &image = m_doc.image(m_doc.selectedImage());
+        painter.save();
+        painter.resetTransform();
+        painter.setPen(QPen(QColor("#1769aa"), 1));
+        painter.setBrush(Qt::white);
+        for (const QPointF &point : FloatingImageMath::controlPoints(image)) {
+            const QPointF center = toWidget(FloatingImageMath::toCanvas(image, point));
+            painter.drawRect(QRectF(center - QPointF(4, 4), QSizeF(8, 8)));
+        }
+        painter.restore();
+    }
     if (m_tool == CloneStampTool && m_hasCloneSource) {
         painter.resetTransform();
         const QPointF center = toWidget(m_cloneMarker);
@@ -411,7 +443,7 @@ bool PerspectiveCanvas::floatingImageAt(const QPointF &canvasPoint, int *imageIn
         const FloatingImage &img = m_doc.images()[idx];
         if (img.image.isNull())
             continue;
-        const QRectF imageRect(QPointF(0, 0), QSizeF(img.image.size()));
+        const QRectF imageRect(QPointF(0, 0), img.displayedSize());
         if (!img.attached || img.faces.isEmpty()) {
             const QPointF local = canvasPoint - img.position;
             if (imageRect.contains(local)) {
@@ -541,6 +573,30 @@ void PerspectiveCanvas::finishPlaneCreation()
 }
 
 // 鼠标按下事件：按当前工具分派（拖动浮动图像/创建平面/编辑平面/落笔）
+int PerspectiveCanvas::imageTransformHandleAt(const QPointF &point) const
+{
+    if (m_tool != TransformTool || !hasSelectedImage())
+        return -1;
+    const FloatingImage &image = m_doc.image(m_doc.selectedImage());
+    const QVector<QPointF> points = FloatingImageMath::controlPoints(image);
+    for (int i = 0; i < points.size(); ++i)
+        if (QLineF(point, FloatingImageMath::toCanvas(image, points[i])).length() <= 8 / m_scale)
+            return i;
+    return -1;
+}
+
+void PerspectiveCanvas::resizeFloatingImage(const QPointF &point, bool keepAspect, bool fromCenter)
+{
+    QPointF surface;
+    if (!FloatingImageMath::fromCanvas(m_imageDragStart, point, &surface, m_transformFace))
+        return;
+    const FloatingImage image = FloatingImageMath::resized(m_imageDragStart, m_transformHandle,
+                                                          surface - m_transformGrabOffset, keepAspect, fromCenter);
+    m_doc.image(m_draggingImage) = image;
+    m_stateChanged = image.position != m_imageDragStart.position || image.scale != m_imageDragStart.scale;
+    update();
+}
+
 void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton)
@@ -551,6 +607,23 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
         return;
     }
     const QPointF point = toImage(event->position());
+    const int transformHandle = imageTransformHandleAt(point);
+    if (transformHandle >= 0) {
+        m_draggingImage = m_doc.selectedImage();
+        m_imageDragStart = m_doc.image(m_draggingImage);
+        const QPointF control = FloatingImageMath::controlPoints(m_imageDragStart)[transformHandle];
+        FloatingImageMath::toCanvas(m_imageDragStart, control, &m_transformFace);
+        QPointF surface;
+        if (!FloatingImageMath::fromCanvas(m_imageDragStart, point, &surface, m_transformFace)) {
+            m_draggingImage = -1;
+            return;
+        }
+        m_transformGrabOffset = surface - control;
+        m_transformHandle = transformHandle;
+        m_stateChanged = false;
+        return;
+    }
+    const bool wasTransformTool = m_tool == TransformTool;
     const bool insideCanvas = m_doc.background().rect().contains(point.toPoint());
     QPointF grabbedImagePoint;
     int grabbedImage = -1;
@@ -577,6 +650,8 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
         update();
         return;
     }
+    if (wasTransformTool)
+        return;
 
     if (m_tool == CreatePlane) {
         m_creationPoints.append(point);
@@ -651,6 +726,10 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
+    if (m_transformHandle >= 0 && m_draggingImage >= 0 && (event->buttons() & Qt::LeftButton)) {
+        resizeFloatingImage(point, event->modifiers() & Qt::ShiftModifier, event->modifiers() & Qt::AltModifier);
+        return;
+    }
     if (m_tool == CloneStampTool) {
         if (m_drawing && (event->buttons() & Qt::LeftButton)) {
             const QPointF position = m_cloneTargetToCanvas.inverted().map(point);
@@ -664,6 +743,15 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
         return;
     }
     if (m_draggingImage >= 0 && (event->buttons() & Qt::LeftButton)) {
+        if (m_tool == TransformTool && m_imageDragStart.attached) {
+            QPointF surface;
+            if (FloatingImageMath::fromCanvas(m_imageDragStart, point, &surface)) {
+                m_doc.setImagePosition(m_draggingImage, surface - m_imageDragOffset);
+                m_stateChanged = m_doc.image(m_draggingImage).position != m_imageDragStart.position;
+                update();
+            }
+            return;
+        }
         // 指针落在某个平面上时，把图像吸附到该平面的展开曲面；
         // 已吸附且可沿快照曲面映射时继续移动；其余情况脱离回画布坐标。
         const int targetPlane = planeAt(m_doc.planes(), point);
@@ -731,6 +819,21 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 // 根据悬停位置更新鼠标光标形状（抓手/十字/方向缩放等）
 void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
 {
+    const int transformHandle = imageTransformHandleAt(imagePoint);
+    if (transformHandle >= 0) {
+        const FloatingImage &image = m_doc.image(m_doc.selectedImage());
+        const auto points = FloatingImageMath::controlPoints(image);
+        const int opposite = transformHandle < 4 ? (transformHandle + 2) % 4 : 4 + (transformHandle - 4 + 2) % 4;
+        const QPointF axis = FloatingImageMath::toCanvas(image, points[transformHandle])
+                             - FloatingImageMath::toCanvas(image, points[opposite]);
+        if (qAbs(axis.x()) < qAbs(axis.y()) * .42)
+            setCursor(Qt::SizeVerCursor);
+        else if (qAbs(axis.y()) < qAbs(axis.x()) * .42)
+            setCursor(Qt::SizeHorCursor);
+        else
+            setCursor(axis.x() * axis.y() >= 0 ? Qt::SizeFDiagCursor : Qt::SizeBDiagCursor);
+        return;
+    }
     if (m_tool == CloneStampTool) {
         setCursor(Qt::CrossCursor);
         return;
@@ -785,6 +888,11 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+    if (m_transformHandle >= 0 && m_draggingImage >= 0) {
+        resizeFloatingImage(toImage(event->position()), event->modifiers() & Qt::ShiftModifier,
+                            event->modifiers() & Qt::AltModifier);
+        m_transformHandle = m_transformFace = -1;
+    }
     if (m_tool == CloneStampTool && m_drawing) {
         const QPointF point = toImage(event->position());
         const QRect dirty = m_clone.drawStrokeTo(m_doc.paintLayer(), m_cloneTargetToCanvas.inverted().map(point));

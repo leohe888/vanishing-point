@@ -20,7 +20,7 @@ class PerspectiveCanvas : public QWidget
 {
     Q_OBJECT
 public:
-    enum Tool { CreatePlane, EditPlane, BrushTool, CloneStampTool };
+    enum Tool { CreatePlane, EditPlane, BrushTool, CloneStampTool, TransformTool };
     Q_ENUM(Tool)
 
     explicit PerspectiveCanvas(QWidget *parent = nullptr);
@@ -28,6 +28,7 @@ public:
     bool saveResult(const QString &fileName) const; // 将当前场景（含绘画层）导出为图像文件
     bool hasSelectedPlane() const { return m_doc.selectedPlane() >= 0 && m_doc.selectedPlane() < m_doc.planes().size(); }
     bool hasLoadedImage() const { return m_doc.hasLoadedImage(); }
+    bool hasSelectedImage() const { return m_doc.selectedImage() >= 0 && m_doc.selectedImage() < m_doc.images().size(); }
     QColor brushColor() const { return m_paint.color(); }
 
 public slots:
@@ -46,6 +47,7 @@ public slots:
     void redo();                           // 重做被撤销的操作
 
 signals:
+    void imageSelectionChanged(bool selected);
     void statusMessage(const QString &text, int timeout = 0);   // 在状态栏显示提示消息
     void toolChangeRequested(Tool tool);                        // 画布请求切换工具（如创建完平面后）
     void canUndoChanged(bool available);                        // 撤销可用性变化
@@ -86,6 +88,8 @@ private:
     void finishPlaneCreation();
     void beginClone(const QPointF &point, bool pickSource);
     void updateCloneMarker(const QPointF &point);
+    int imageTransformHandleAt(const QPointF &point) const;
+    void resizeFloatingImage(const QPointF &point, bool keepAspect, bool fromCenter);
 
     CanvasDocument m_doc;                     // 文档模型（平面、绘画层、浮动图像、历史）
     qreal m_antsPhase = 0;
@@ -104,6 +108,9 @@ private:
     bool m_drawing = false;                   // 正在绘制笔迹
     bool m_extruding = false;                 // 正在从边缘拖出垂直平面
     int m_draggingImage = -1;                 // 正在拖动的浮动图像索引（-1 无）
+    int m_transformHandle = -1;
+    int m_transformFace = -1;
+    QPointF m_transformGrabOffset;
     QPointF m_pressImagePoint;                // 鼠标按下时的图像坐标
     QPointF m_lastImagePoint;                 // 最近一次的图像坐标
     Plane m_dragStartPlane;                   // 拖动开始时的平面快照

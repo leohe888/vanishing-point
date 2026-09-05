@@ -26,7 +26,7 @@ bool CanvasDocument::loadImage(const QString &fileName)
     m_planes.clear();
     m_images.clear();
     m_selectedPlane = -1;
-    m_selectedImage = -1;
+    setSelectedImage(-1);
     m_paintLayer = QImage(m_background.size(), QImage::Format_ARGB32);
     m_paintLayer.fill(Qt::transparent);
     m_paintTransactionActive = false;
@@ -119,12 +119,21 @@ int CanvasDocument::addFloatingImage(const QImage &image)
     floating.attached = false;
     floating.hostFace = -1;
     m_images.append(floating);
-    m_selectedImage = m_images.size() - 1;
+    setSelectedImage(m_images.size() - 1);
     commitHistory();
     return m_selectedImage;
 }
 
 // 仅移动图像位置（不改变吸附状态）
+void CanvasDocument::setSelectedImage(int index)
+{
+    index = index >= 0 && index < m_images.size() ? index : -1;
+    if (m_selectedImage == index)
+        return;
+    m_selectedImage = index;
+    emit imageSelectionChanged(index >= 0);
+}
+
 void CanvasDocument::setImagePosition(int index, const QPointF &position)
 {
     if (index < 0 || index >= m_images.size())
@@ -164,6 +173,7 @@ bool CanvasDocument::rotateImage(int index)
         return false;
     m_images[index].image = m_images[index].image.transformed(QTransform().rotate(90),
                                                                Qt::SmoothTransformation);
+    m_images[index].scale = QPointF(m_images[index].scale.y(), m_images[index].scale.x());
     commitHistory();
     return true;
 }
@@ -267,7 +277,7 @@ void CanvasDocument::restoreStructure(const HistoryEntry &entry)
     m_planes = entry.planes;
     m_selectedPlane = entry.selectedPlane;
     m_images = entry.images;
-    m_selectedImage = entry.selectedImage;
+    setSelectedImage(entry.selectedImage);
 }
 
 // 把像素直接覆盖回绘画层的指定矩形（用于脏矩形的撤销/重做）
