@@ -48,9 +48,6 @@ void MainWindow::buildUi()
     if (!redoShortcuts.contains(QKeySequence("Ctrl+Shift+Z")))
         redoShortcuts.append(QKeySequence("Ctrl+Shift+Z"));
     redoAction->setShortcuts(redoShortcuts);
-    fileBar->addSeparator();
-    auto *clearPaintAction = fileBar->addAction(tr("清除绘画"));
-    clearPaintAction->setEnabled(false);
     saveAction->setEnabled(false);
 
     auto *root = new QWidget(this);
@@ -209,7 +206,6 @@ void MainWindow::buildUi()
         if (!file.isEmpty() && !m_canvas->saveResult(file))
             QMessageBox::warning(this, tr("保存失败"), tr("无法写入目标文件。"));
     });
-    connect(clearPaintAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::clearPainting);
     connect(undoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::undo);
     connect(redoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::redo);
     connect(m_canvas, &PerspectiveCanvas::canUndoChanged, undoAction, &QAction::setEnabled);
@@ -218,9 +214,8 @@ void MainWindow::buildUi()
         m_tools->button(PerspectiveCanvas::TransformTool)->setEnabled(selected);
     });
     connect(m_canvas, &PerspectiveCanvas::documentAvailabilityChanged, this,
-            [this, saveAction, clearPaintAction](bool available) {
+            [this, saveAction](bool available) {
                 saveAction->setEnabled(available);
-                clearPaintAction->setEnabled(available);
                 for (QAbstractButton *button : m_tools->buttons())
                     button->setEnabled(available && (m_tools->id(button) != PerspectiveCanvas::TransformTool
                                                      || m_canvas->hasSelectedImage()));
