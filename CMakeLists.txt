@@ -21,6 +21,8 @@ qt_add_executable(VanisingPoint
     canvasdocument.h
     paintengine.cpp
     paintengine.h
+    clonestampengine.cpp
+    clonestampengine.h
     scenerenderer.cpp
     scenerenderer.h
     perspectivecanvas.cpp
@@ -33,6 +35,20 @@ target_link_libraries(VanisingPoint
         Qt::Core
         Qt::Widgets
 )
+
+option(VP_BUILD_TESTS "Build clone stamp regression tests" OFF)
+if(VP_BUILD_TESTS)
+    enable_testing()
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
+    qt_add_executable(CloneStampTests
+        tests/clonestamptests.cpp
+        clonestampengine.cpp paintengine.cpp planemath.cpp
+        canvasdocument.cpp scenerenderer.cpp perspectivecanvas.cpp mainwindow.cpp
+    )
+    target_include_directories(CloneStampTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(CloneStampTests PRIVATE Qt::Widgets Qt::Test)
+    add_test(NAME CloneStampTests COMMAND CloneStampTests -platform offscreen)
+endif()
 
 # 安装规则：Bundle 安装到根目录，其余平台按标准目录安装
 install(TARGETS VanisingPoint

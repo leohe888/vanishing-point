@@ -34,5 +34,6 @@ private:
     QWidget *m_hardnessRow = nullptr;      // 硬度“标签+数值”行（按工具显隐）
     QWidget *m_opacityRow = nullptr;       // 不透明度“标签+数值”行（按工具显隐）
     QWidget *m_colorRow = nullptr;         // 颜色选择行（仅画笔工具显示）
+    QWidget *m_cloneAligned = nullptr;
 };
 #endif // MAINWINDOW_H

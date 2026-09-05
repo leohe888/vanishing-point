@@ -44,6 +44,8 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
 {
     if (!m_doc.loadImage(fileName))
         return false;
+    cancelInteraction();
+    m_hasCloneSource = m_hasCloneOffset = false;
     m_creationPoints.clear();
     updateViewTransform();
     update();
@@ -188,6 +190,8 @@ void PerspectiveCanvas::flipFloatingImageVertical()
 // 撤销：回退到上一份状态并清空进行中的交互
 void PerspectiveCanvas::undo()
 {
+    if (m_drawing && m_stateChanged)
+        m_doc.commitHistory();
     if (!m_doc.undo())
         return;
     cancelInteraction();
@@ -206,6 +210,11 @@ void PerspectiveCanvas::redo()
 // 清空一切进行中的交互状态（撤销/重做/Esc 取消后调用）
 void PerspectiveCanvas::cancelInteraction()
 {
+    m_clone.endStroke();
+    if (!m_cloneAligned)
+        m_hasCloneOffset = false;
+    if (m_hasCloneSource)
+        m_cloneMarker = m_cloneSourceToCanvas.map(m_cloneSource);
     m_creationPoints.clear();
     m_dragging = m_drawing = m_extruding = false;
     m_draggingImage = -1;
@@ -219,6 +228,9 @@ void PerspectiveCanvas::cancelInteraction()
 // 切换当前工具，并清理进行中的交互状态、更新光标与提示
 void PerspectiveCanvas::setTool(Tool tool)
 {
+    if (m_drawing && m_stateChanged)
+        m_doc.commitHistory();
+    cancelInteraction();
     m_tool = tool;
     m_creationPoints.clear();
     m_dragging = m_drawing = false;
@@ -228,7 +240,8 @@ void PerspectiveCanvas::setTool(Tool tool)
     const QString messages[] = {
         tr("依次单击四个角点以创建平面"),
         tr("拖动控制点或平面；按住 Ctrl 从边缘拖出垂直于当前平面的平面"),
-        tr("在平面内拖动进行透视绘画，笔触可延伸到平面之外")
+        tr("在平面内拖动进行透视绘画，笔触可延伸到平面之外"),
+        tr("Alt+左键设置源点；在透视平面内拖动仿制。对齐时源点持续跟随光标")
     };
     emit statusMessage(messages[tool]);
     update();
@@ -279,6 +292,104 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
     renderer.render(painter, m_scale, true, m_creationPoints,
                     m_hasExtrudePreview ? &m_extrudePreview : nullptr,
                     m_tool == EditPlane, m_hoverPlane);
+    if (m_tool == CloneStampTool && m_hasCloneSource) {
+        painter.resetTransform();
+        const QPointF center = toWidget(m_cloneMarker);
+        painter.setPen(QPen(QColor("#12351e"), 4));
+        painter.drawLine(center + QPointF(-9, 0), center + QPointF(9, 0));
+        painter.drawLine(center + QPointF(0, -9), center + QPointF(0, 9));
+        painter.setPen(QPen(QColor("#43ff76"), 2));
+        painter.drawLine(center + QPointF(-9, 0), center + QPointF(9, 0));
+        painter.drawLine(center + QPointF(0, -9), center + QPointF(0, 9));
+    }
+}
+
+void PerspectiveCanvas::setCloneAligned(bool aligned)
+{
+    m_cloneAligned = aligned;
+    if (!m_drawing) {
+        m_hasCloneOffset = false;
+        if (m_hasCloneSource)
+            m_cloneMarker = m_cloneSourceToCanvas.map(m_cloneSource);
+    }
+    update();
+}
+
+void PerspectiveCanvas::updateCloneMarker(const QPointF &point)
+{
+    if (!m_hasCloneSource)
+        return;
+    m_cloneMarker = m_cloneSourceToCanvas.map(m_cloneSource);
+    if (m_hasCloneOffset && (m_drawing || m_cloneAligned)) {
+        if (!m_drawing) {
+            const int index = planeAt(m_doc.planes(), point);
+            if (index >= 0) {
+                const Facet &face = m_doc.planes()[index];
+                QTransform target;
+                if (QTransform::quadToQuad(planePolygon(face.surfaceCorner), planePolygon(face.corner), target))
+                    m_cloneTargetToCanvas = target;
+            }
+        }
+        bool ok = false;
+        const QTransform inverse = m_cloneTargetToCanvas.inverted(&ok);
+        if (ok)
+            m_cloneMarker = m_cloneSourceToCanvas.map(inverse.map(point) + m_cloneOffset);
+    }
+}
+
+void PerspectiveCanvas::beginClone(const QPointF &point, bool pickSource)
+{
+    const int index = planeAt(m_doc.planes(), point);
+    if (pickSource) {
+        // 平面外也可取样：此时源图像像素就是展开坐标。
+        m_cloneSourceToCanvas = QTransform();
+        if (index >= 0) {
+            const Facet &face = m_doc.planes()[index];
+            if (!QTransform::quadToQuad(planePolygon(face.surfaceCorner), planePolygon(face.corner),
+                                        m_cloneSourceToCanvas))
+                return;
+        }
+        m_cloneSource = m_cloneSourceToCanvas.inverted().map(point);
+        m_cloneMarker = point;
+        m_hasCloneSource = true;
+        m_hasCloneOffset = false;
+        m_stateChanged = false;
+        emit statusMessage(tr("源点已设置，左键拖动进行透视仿制"), 3000);
+        update();
+        return;
+    }
+    if (!m_hasCloneSource) {
+        emit statusMessage(tr("请先按住 Alt 并单击画布设置仿制源点"), 3000);
+        return;
+    }
+    if (index < 0) {
+        emit statusMessage(tr("请在一个透视平面内开始仿制"), 3000);
+        return;
+    }
+    const Facet &face = m_doc.planes()[index];
+    QTransform target;
+    if (!QTransform::quadToQuad(planePolygon(face.surfaceCorner), planePolygon(face.corner), target))
+        return;
+    const QPointF position = target.inverted().map(point);
+    if (!m_cloneAligned || !m_hasCloneOffset)
+        m_cloneOffset = m_cloneSource - position;
+    m_cloneTargetToCanvas = target;
+    m_hasCloneOffset = true;
+    QImage source(m_doc.background().size(), QImage::Format_ARGB32_Premultiplied);
+    source.fill(Qt::transparent);
+    {
+        QPainter painter(&source);
+        SceneRenderer(m_doc).render(painter, 1, false);
+    }
+    m_doc.setSelectedPlane(index);
+    m_doc.beginPaintTransaction();
+    m_drawing = true;
+    const QRect dirty = m_clone.beginStroke(m_doc.paintLayer(), source, target,
+                                           m_cloneSourceToCanvas, m_cloneOffset, position);
+    m_doc.addPaintDirty(dirty);
+    m_stateChanged = !dirty.isEmpty();
+    updateCloneMarker(point);
+    update();
 }
 
 // 命中测试：判断某个画布坐标是否落在某张浮动图像上（从最上层开始）。
@@ -433,6 +544,11 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     if (!m_doc.background().rect().contains(point.toPoint()))
         return;
 
+    if (m_tool == CloneStampTool) {
+        beginClone(point, event->modifiers() & Qt::AltModifier);
+        return;
+    }
+
     QPointF grabbedImagePoint;
     int grabbedImage = -1;
     if (floatingImageAt(point, &grabbedImage, &grabbedImagePoint)) {
@@ -518,6 +634,18 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
+    if (m_tool == CloneStampTool) {
+        if (m_drawing && (event->buttons() & Qt::LeftButton)) {
+            const QPointF position = m_cloneTargetToCanvas.inverted().map(point);
+            const QRect dirty = m_clone.drawStrokeTo(m_doc.paintLayer(), position);
+            m_doc.addPaintDirty(dirty);
+            m_stateChanged |= !dirty.isEmpty();
+        }
+        updateCloneMarker(point);
+        setCursor(Qt::CrossCursor);
+        update();
+        return;
+    }
     if (m_draggingImage >= 0 && (event->buttons() & Qt::LeftButton)) {
         // 指针落在某个平面上时，把图像吸附到该平面的展开曲面；
         // 已吸附且可沿快照曲面映射时继续移动；其余情况脱离回画布坐标。
@@ -586,6 +714,10 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 // 根据悬停位置更新鼠标光标形状（抓手/十字/方向缩放等）
 void PerspectiveCanvas::updateHoverCursor(const QPointF &imagePoint)
 {
+    if (m_tool == CloneStampTool) {
+        setCursor(Qt::CrossCursor);
+        return;
+    }
     if (floatingImageAt(imagePoint, nullptr, nullptr)) {
         setCursor(Qt::OpenHandCursor);
         return;
@@ -636,6 +768,17 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+    if (m_tool == CloneStampTool && m_drawing) {
+        const QPointF point = toImage(event->position());
+        const QRect dirty = m_clone.drawStrokeTo(m_doc.paintLayer(), m_cloneTargetToCanvas.inverted().map(point));
+        m_doc.addPaintDirty(dirty);
+        m_stateChanged |= !dirty.isEmpty();
+        m_clone.endStroke();
+        m_drawing = false;
+        if (!m_cloneAligned)
+            m_hasCloneOffset = false;
+        updateCloneMarker(point);
+    }
     if (m_extruding && m_hasExtrudePreview) {
         const QRectF bounds = planePolygon(m_extrudePreview.corner).boundingRect();
         const qreal area = qAbs(bounds.width() * bounds.height());
@@ -654,6 +797,7 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
     m_brushPlaneIndex = -1;
     if (m_stateChanged)
         m_doc.commitHistory();
+    m_stateChanged = false;
     const QPointF point = toImage(event->position());
     m_hoverPlane = planeAt(m_doc.planes(), point);
     updateHoverCursor(point);
@@ -667,6 +811,8 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
         pasteClipboardImage();
         event->accept();
     } else if (event->key() == Qt::Key_Escape) {
+        if (m_drawing && m_stateChanged)
+            m_doc.commitHistory();
         // 取消拖动中的浮动图像，恢复到拖动开始时的完整快照
         if (m_draggingImage >= 0)
             m_doc.image(m_draggingImage) = m_imageDragStart;

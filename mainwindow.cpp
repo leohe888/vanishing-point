@@ -5,6 +5,7 @@
 #include <QAbstractButton>
 #include <QButtonGroup>
 #include <QColorDialog>
+#include <QCheckBox>
 #include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
@@ -76,7 +77,7 @@ void MainWindow::buildUi()
     m_tools = new QButtonGroup(this);
     m_tools->setExclusive(true);
     const QStringList toolNames{tr("创建平面  (C)"), tr("编辑平面  (V)"),
-                                tr("画笔工具  (B)")};
+                                tr("画笔工具  (B)"), tr("图章工具  (S)")};
     for (int i = 0; i < toolNames.size(); ++i) {
         auto *button = new QToolButton(side);
         button->setText(toolNames[i]);
@@ -122,6 +123,11 @@ void MainWindow::buildUi()
     m_diameter = addSlider(tr("直径"), 2, 200, 42, &m_diameterRow);
     m_hardness = addSlider(tr("硬度"), 0, 100, 75, &m_hardnessRow);
     m_opacity = addSlider(tr("不透明度"), 1, 100, 100, &m_opacityRow);
+    auto *aligned = new QCheckBox(tr("对齐"), side);
+    aligned->setChecked(true);
+    aligned->setToolTip(tr("勾选：松开鼠标后源点继续跟随；取消：每一笔从最初的源点重新取样"));
+    m_cloneAligned = aligned;
+    sideLayout->addWidget(aligned);
 
     m_colorRow = new QWidget(side);
     auto *colorLayout = new QHBoxLayout(m_colorRow);
@@ -136,7 +142,7 @@ void MainWindow::buildUi()
     colorLayout->addWidget(colorButton);
     sideLayout->addWidget(m_colorRow);
 
-    auto *hint = new QLabel(tr("创建：依次点击四个角点\n编辑：拖动控制点；Ctrl+拖出垂直于当前平面的平面\n画笔：在平面内拖动绘制"), side);
+    auto *hint = new QLabel(tr("创建：依次点击四个角点\n编辑：拖动控制点；Ctrl+拖出垂直于当前平面的平面\n画笔：在平面内拖动绘制\n图章：Alt+左键取样，左键拖动仿制"), side);
     hint->setWordWrap(true);
     hint->setObjectName("hint");
     sideLayout->addStretch();
@@ -157,6 +163,7 @@ void MainWindow::buildUi()
         #sectionTitle { color:#f1f3f5; font-size:15px; font-weight:600; }
         #hint { color:#aeb4bc; }
         QLabel { color:#d7dbe0; }
+        QCheckBox { color:#d7dbe0; }
         QToolButton { color:#dfe3e8; background:#3b4047; border:1px solid #4a5058;
                       border-radius:4px; text-align:left; padding-left:12px; }
         QToolButton:hover { background:#464c54; }
@@ -183,7 +190,7 @@ void MainWindow::buildUi()
                     button->click();
             });
     const QList<QKeySequence> shortcuts{QKeySequence("C"), QKeySequence("V"),
-                                        QKeySequence("B")};
+                                        QKeySequence("B"), QKeySequence("S")};
     for (int i = 0; i < shortcuts.size(); ++i) {
         auto *shortcut = new QShortcut(shortcuts[i], this);
         connect(shortcut, &QShortcut::activated, m_tools->button(i), &QAbstractButton::click);
@@ -195,6 +202,7 @@ void MainWindow::buildUi()
     connect(m_diameter, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushDiameter);
     connect(m_hardness, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushHardness);
     connect(m_opacity, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushOpacity);
+    connect(aligned, &QCheckBox::toggled, m_canvas, &PerspectiveCanvas::setCloneAligned);
     connect(colorButton, &QPushButton::clicked, this, &MainWindow::chooseColor);
     connect(openAction, &QAction::triggered, this, [this] {
         const QString file = QFileDialog::getOpenFileName(this, tr("打开图像"), {},
@@ -235,17 +243,20 @@ void MainWindow::buildUi()
 
 void MainWindow::updateToolOptions(int toolId)
 {
-    // 只有画笔工具需要显示笔刷几何参数与前景色选项。
+    // 画笔和图章共享笔刷参数，图章单独显示对齐选项。
     const bool isBrushTool = toolId == PerspectiveCanvas::BrushTool;
+    const bool isCloneTool = toolId == PerspectiveCanvas::CloneStampTool;
+    const bool showSettings = isBrushTool || isCloneTool;
 
-    m_brushTitle->setVisible(isBrushTool);
-    m_diameterRow->setVisible(isBrushTool);
-    m_diameter->setVisible(isBrushTool);
-    m_hardnessRow->setVisible(isBrushTool);
-    m_hardness->setVisible(isBrushTool);
-    m_opacityRow->setVisible(isBrushTool);
-    m_opacity->setVisible(isBrushTool);
+    m_brushTitle->setVisible(showSettings);
+    m_diameterRow->setVisible(showSettings);
+    m_diameter->setVisible(showSettings);
+    m_hardnessRow->setVisible(showSettings);
+    m_hardness->setVisible(showSettings);
+    m_opacityRow->setVisible(showSettings);
+    m_opacity->setVisible(showSettings);
     m_colorRow->setVisible(isBrushTool);
+    m_cloneAligned->setVisible(isCloneTool);
 }
 
 // 打开颜色对话框，选择画笔颜色并同步更新色块预览

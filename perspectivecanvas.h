@@ -2,6 +2,7 @@
 
 #include "canvasdocument.h"
 #include "paintengine.h"
+#include "clonestampengine.h"
 #include "planemath.h"
 
 #include <QColor>
@@ -19,7 +20,7 @@ class PerspectiveCanvas : public QWidget
 {
     Q_OBJECT
 public:
-    enum Tool { CreatePlane, EditPlane, BrushTool }; // 工具枚举：创建平面/编辑平面/画笔
+    enum Tool { CreatePlane, EditPlane, BrushTool, CloneStampTool };
     Q_ENUM(Tool)
 
     explicit PerspectiveCanvas(QWidget *parent = nullptr);
@@ -31,9 +32,10 @@ public:
 
 public slots:
     void setTool(Tool tool);
-    void setBrushDiameter(int value) { m_paint.setDiameter(value); }        // 设置笔刷直径（像素）
-    void setBrushHardness(int value) { m_paint.setHardness(value); }        // 设置笔刷硬度（0~1）
-    void setBrushOpacity(int value) { m_paint.setOpacity(value); }          // 设置笔刷不透明度（0~1）
+    void setBrushDiameter(int value) { m_paint.setDiameter(value); m_clone.setDiameter(value); }
+    void setBrushHardness(int value) { m_paint.setHardness(value); m_clone.setHardness(value); }
+    void setBrushOpacity(int value) { m_paint.setOpacity(value); m_clone.setOpacity(value); }
+    void setCloneAligned(bool aligned);
     void setBrushColor(const QColor &color) { m_paint.setColor(color); }
     void clearPainting();                  // 清除绘画层上的绘画内容
     void pasteClipboardImage();            // 把剪贴板图像作为浮动图像粘贴到画布
@@ -82,9 +84,17 @@ private:
     void dropFloatingImage(const QImage &image, const QString &statusText);
     // 用当前 4 个创建角点生成平面；有效时追加到文档并进入编辑工具
     void finishPlaneCreation();
+    void beginClone(const QPointF &point, bool pickSource);
+    void updateCloneMarker(const QPointF &point);
 
     CanvasDocument m_doc;                     // 文档模型（平面、绘画层、浮动图像、历史）
     PaintEngine m_paint;                      // 笔刷引擎
+    CloneStampEngine m_clone;
+    bool m_cloneAligned = true;
+    bool m_hasCloneSource = false;
+    bool m_hasCloneOffset = false;
+    QTransform m_cloneSourceToCanvas, m_cloneTargetToCanvas;
+    QPointF m_cloneSource, m_cloneOffset, m_cloneMarker;
     QVector<QPointF> m_creationPoints;        // 创建平面过程中已点击的角点
     Tool m_tool = CreatePlane;                // 当前工具
     int m_dragHandle = -1;                    // 正在拖动的控制点索引
