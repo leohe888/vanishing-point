@@ -59,6 +59,10 @@ int handleAt(const Facet &facet, const QPointF &point, qreal tolerance); // 控�
 int edgeAt(const Facet &facet, const QPointF &point, qreal tolerance);   // 边缘索引
 
 // —— 平面构造算法（pressPoint 为本次拖动的按下起点） ——
+// 在原来的无限透视平面上平移有限四边形，同时移动展开坐标以保持单应规则。
+// 越过地平线、出现极点或退化时返回 false，调用方保留最后有效位置。
+bool movePlaneOnSurface(const Plane &source, const QPointF &dragPoint,
+                        const QPointF &pressPoint, Plane *result);
 // 沿某条边方向缩放平面：只改变该边到对边的距离，保持透视关系不变
 Plane resizePlaneAlongEdge(const Plane &source, int edge,
                            const QPointF &dragPoint, const QPointF &pressPoint);

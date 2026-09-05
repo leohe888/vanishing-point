@@ -180,6 +180,45 @@ int edgeAt(const Facet &facet, const QPointF &point, qreal tolerance)
     return -1;
 }
 
+// 保持原单应变换，在展开坐标中平移四个角点后重新投影。
+bool movePlaneOnSurface(const Plane &source, const QPointF &dragPoint,
+                        const QPointF &pressPoint, Plane *result)
+{
+    if (!result || !qIsFinite(dragPoint.x()) || !qIsFinite(dragPoint.y()))
+        return false;
+    bool pressOk = false, dragOk = false;
+    const QPointF press = planeToSurface(source, pressPoint, &pressOk);
+    const QPointF drag = planeToSurface(source, dragPoint, &dragOk);
+    if (!pressOk || !dragOk)
+        return false;
+    QTransform projection;
+    if (!QTransform::quadToQuad(planePolygon(source.surfaceCorner), planePolygon(source.corner), projection))
+        return false;
+    const QPointF center = (source.surfaceCorner[0] + source.surfaceCorner[1]
+                            + source.surfaceCorner[2] + source.surfaceCorner[3]) / 4;
+    auto denominator = [&projection](const QPointF &point) {
+        return projection.m13() * point.x() + projection.m23() * point.y() + projection.m33();
+    };
+    const qreal referenceW = denominator(center);
+    const QPointF delta = drag - press;
+    Plane candidate = source;
+    for (int i = 0; i < 4; ++i) {
+        candidate.surfaceCorner[i] = source.surfaceCorner[i] + delta;
+        const qreal w = denominator(candidate.surfaceCorner[i]);
+        if (!qIsFinite(w) || w * referenceW <= 0 || qAbs(w) <= qAbs(referenceW) * 1e-6)
+            return false;
+        candidate.corner[i] = projection.map(candidate.surfaceCorner[i]);
+        const QPointF &corner = candidate.corner[i];
+        if (!qIsFinite(corner.x()) || !qIsFinite(corner.y())
+            || qAbs(corner.x()) > 1e7 || qAbs(corner.y()) > 1e7)
+            return false;
+    }
+    if (!isValidPlane(candidate))
+        return false;
+    *result = candidate;
+    return true;
+}
+
 // 沿某条边方向缩放平面：只改变该边到对边的距离，保持透视关系不变
 Plane resizePlaneAlongEdge(const Plane &source, int edge,
                            const QPointF &dragPoint, const QPointF &pressPoint)

@@ -47,6 +47,54 @@ private:
     }
 
 private slots:
+    void planeMovesWithinInfinitePerspective()
+    {
+        Plane source;
+        source.surfaceGroup = 7;
+        const QPolygonF surface{QPointF(0, 0), QPointF(200, 0), QPointF(200, 100), QPointF(0, 100)};
+        const QTransform projection(1, 0, 0, 0, -1, .004, 100, 350, 1);
+        for (int i = 0; i < 4; ++i) {
+            source.surfaceCorner[i] = surface[i];
+            source.corner[i] = projection.map(surface[i]);
+        }
+        const QPointF press = projection.map(QPointF(70, 40));
+        for (const QPointF &delta : {QPointF(0, 80), QPointF(0, -20), QPointF(60, 0), QPointF(-60, 0)}) {
+            Plane moved;
+            const QPointF target = projection.map(QPointF(70, 40) + delta);
+            QVERIFY(PlaneMath::movePlaneOnSurface(source, target, press, &moved));
+            QCOMPARE(moved.surfaceGroup, source.surfaceGroup);
+            for (int i = 0; i < 4; ++i) {
+                QVERIFY(QLineF(moved.surfaceCorner[i], surface[i] + delta).length() < .001);
+                QVERIFY(QLineF(moved.corner[i], projection.map(surface[i] + delta)).length() < .001);
+            }
+            if (delta.y() > 0)
+                QVERIFY(QLineF(moved.corner[0], moved.corner[1]).length() < QLineF(source.corner[0], source.corner[1]).length());
+            if (delta.y() < 0)
+                QVERIFY(QLineF(moved.corner[0], moved.corner[1]).length() > QLineF(source.corner[0], source.corner[1]).length());
+            // 四边形移开以后，整个无限平面的映射仍然不变。
+            bool ok = false;
+            const QPointF sample(260, 160);
+            const QPointF recovered = PlaneMath::planeToSurface(moved, projection.map(sample), &ok);
+            QVERIFY(ok);
+            QVERIFY(QLineF(sample, recovered).length() < .001);
+            Plane returned;
+            QVERIFY(PlaneMath::movePlaneOnSurface(moved, press, target, &returned));
+            for (int i = 0; i < 4; ++i)
+                QVERIFY(QLineF(source.corner[i], returned.corner[i]).length() < .001);
+        }
+        Plane rejected = source;
+        QVERIFY(!PlaneMath::movePlaneOnSurface(source, QPointF(100, -250), press, &rejected));
+        QVERIFY(!PlaneMath::movePlaneOnSurface(source, QPointF(100, -300), press, &rejected));
+        QVERIFY(!PlaneMath::movePlaneOnSurface(source, projection.map(QPointF(70, -220)), press, &rejected));
+        QCOMPARE(PlaneMath::planePolygon(rejected.corner), PlaneMath::planePolygon(source.corner));
+        Plane affine = source;
+        for (int i = 0; i < 4; ++i)
+            affine.corner[i] = surface[i] + QPointF(20, 30);
+        Plane translated;
+        QVERIFY(PlaneMath::movePlaneOnSurface(affine, QPointF(100, 100), QPointF(70, 80), &translated));
+        QCOMPARE(translated.corner[0], QPointF(50, 50));
+    }
+
     void floatingImageOutlineAcrossPlanes()
     {
         FloatingImage image;

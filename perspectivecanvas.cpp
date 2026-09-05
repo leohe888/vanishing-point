@@ -297,7 +297,7 @@ void PerspectiveCanvas::setTool(Tool tool)
     setCursor(tool == EditPlane ? Qt::SizeAllCursor : Qt::CrossCursor);
     const QString messages[] = {
         tr("依次单击四个角点以创建平面"),
-        tr("拖动控制点或平面；按住 Ctrl 从边缘拖出垂直于当前平面的平面"),
+        tr("拖动平面内部沿原无限透视平面移动；拖动控制点调整；Ctrl 从边缘拖出垂直平面"),
         tr("在平面内拖动进行透视绘画，笔触可延伸到平面之外"),
         tr("Alt+左键设置源点；在透视平面内拖动仿制。对齐时源点持续跟随光标"),
         tr("拖动控制点缩放，角点外侧拖动旋转；Shift 等比缩放/15°旋转，Alt 中心缩放；Esc 取消")
@@ -864,10 +864,11 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
                 m_stateChanged = true;
             }
         } else {
-            const QPointF delta = point - m_pressImagePoint;
-            for (int i = 0; i < 4; ++i)
-                plane.corner[i] = m_dragStartPlane.corner[i] + delta;
-            m_stateChanged = !delta.isNull();
+            Plane candidate;
+            if (movePlaneOnSurface(m_dragStartPlane, point, m_pressImagePoint, &candidate)) {
+                plane = candidate;
+                m_stateChanged = planePolygon(plane.corner) != planePolygon(m_dragStartPlane.corner);
+            }
         }
         m_lastImagePoint = point;
         update();
