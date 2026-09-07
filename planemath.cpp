@@ -245,6 +245,21 @@ Plane resizePlaneAlongEdge(const Plane &source, int edge,
 
     result.corner[edge] = movedA;
     result.corner[next] = movedB;
+
+    // 四边形范围变了，但它在展开曲面上的参数化必须原封不动：用改动前的
+    // 映射反推两个新角点的曲面坐标。只改 corner 而留下旧的 surfaceCorner，
+    // 等于把整张展开图重新拉伸标定——相邻平面在接缝处会把同一个曲面坐标
+    // 送到不同的画布点，跨缝的浮动图像和笔迹就会错位。
+    const ProjectiveMapping projection = surfaceMapping(source);
+    QPointF surface[2];
+    for (int i = 0; i < 2; ++i) {
+        const int corner = i == 0 ? edge : next;
+        // 新角点落到极点线之外时无法保持展开参数化，此时宁可放弃这次改动。
+        if (!projection.fromCanvas(result.corner[corner], &surface[i]))
+            return source;
+    }
+    result.surfaceCorner[edge] = surface[0];
+    result.surfaceCorner[next] = surface[1];
     return result;
 }
 

@@ -601,9 +601,10 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
                         const QPointF oa = m_doc.planes()[other].corner[oe];
                         const QPointF ob = m_doc.planes()[other].corner[(oe + 1) % 4];
                         if ((QLineF(a, oa).length() < 0.01 && QLineF(b, ob).length() < 0.01) ||
-                            (QLineF(a, ob).length() < 0.01 && QLineF(b, oa).length() < 0.01))
+                            (QLineF(a, ob).length() < 0.01 && QLineF(b, oa).length() < 0.01)) {
                             result |= quint8(1u << edge);
                             break;
+                        }
                     }
                 }
             }
