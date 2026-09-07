@@ -1,6 +1,7 @@
 #include "canvasdocument.h"
 
 #include <QPainter>
+#include <QLineF>
 #include <QTransform>
 
 namespace {
@@ -130,6 +131,26 @@ void CanvasDocument::removePlane(int index)
 {
     if (index < 0 || index >= m_planes.size())
         return;
+    // If this plane was created by extrusion, release every matching edge on
+    // its neighbours before removing it so their shared-edge handles return.
+    const Plane removed = m_planes[index];
+    for (int other = 0; other < m_planes.size(); ++other) {
+        if (other == index)
+            continue;
+        for (int edge = 0; edge < 4; ++edge) {
+            const QPointF a = m_planes[other].corner[edge];
+            const QPointF b = m_planes[other].corner[(edge + 1) % 4];
+            for (int removedEdge = 0; removedEdge < 4; ++removedEdge) {
+                const QPointF ra = removed.corner[removedEdge];
+                const QPointF rb = removed.corner[(removedEdge + 1) % 4];
+                if ((QLineF(a, ra).length() < 0.01 && QLineF(b, rb).length() < 0.01) ||
+                    (QLineF(a, rb).length() < 0.01 && QLineF(b, ra).length() < 0.01)) {
+                    m_planes[other].lockedEdges &= quint8(~(1u << edge));
+                    break;
+                }
+            }
+        }
+    }
     m_planes.removeAt(index);
     if (m_selectedPlane > index)
         --m_selectedPlane;
