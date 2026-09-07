@@ -129,35 +129,34 @@ void SceneRenderer::drawPlaneGuides(QPainter &painter, const Facet &facet, bool 
     painter.setBrush(Qt::NoBrush);
     painter.drawPolygon(planePolygon(facet.corner));
 
-    painter.save();
-    QPainterPath planeClip;
-    planeClip.addPolygon(planePolygon(facet.corner));
-    planeClip.closeSubpath();
-    painter.setClipPath(planeClip, Qt::IntersectClip);
-    painter.setPen(QPen(QColor(65, 182, 235, selected ? 145 : 80), 0.8 / m_viewScale));
-    const qreal safeGridSize = qMax(gridSize, 1.0);
-    // Derive the number of cells from the current projected edge lengths.
-    // Control-point edits change `corner` while often leaving the unfolded
-    // `surfaceCorner` unchanged; using the latter would stretch the same
-    // number of grid lines. Averaging opposite edges keeps cell counts stable
-    // for perspective quads while allowing them to grow/shrink with the plane.
-    const qreal horizontalLength =
-        (QLineF(facet.corner[0], facet.corner[1]).length()
-         + QLineF(facet.corner[3], facet.corner[2]).length()) * 0.5;
-    const qreal verticalLength =
-        (QLineF(facet.corner[0], facet.corner[3]).length()
-         + QLineF(facet.corner[1], facet.corner[2]).length()) * 0.5;
-    const int horizontalDivisions = qMax(1, qRound(horizontalLength / safeGridSize));
-    const int verticalDivisions = qMax(1, qRound(verticalLength / safeGridSize));
-    for (int i = 1; i < horizontalDivisions; ++i) {
-        const qreal t = qreal(i) / horizontalDivisions;
-        painter.drawLine(uvToPlane(facet, QPointF(t, 0)), uvToPlane(facet, QPointF(t, 1)));
+    if (selected) {
+        painter.save();
+        QPainterPath planeClip;
+        planeClip.addPolygon(planePolygon(facet.corner));
+        planeClip.closeSubpath();
+        painter.setClipPath(planeClip, Qt::IntersectClip);
+        painter.setPen(QPen(QColor(65, 182, 235, 145), 0.8 / m_viewScale));
+        const qreal safeGridSize = qMax(gridSize, 1.0);
+        // Derive cell counts from current projected edge lengths so resizing
+        // a plane changes the number of cells instead of stretching them.
+        const qreal horizontalLength =
+            (QLineF(facet.corner[0], facet.corner[1]).length()
+             + QLineF(facet.corner[3], facet.corner[2]).length()) * 0.5;
+        const qreal verticalLength =
+            (QLineF(facet.corner[0], facet.corner[3]).length()
+             + QLineF(facet.corner[1], facet.corner[2]).length()) * 0.5;
+        const int horizontalDivisions = qMax(1, qRound(horizontalLength / safeGridSize));
+        const int verticalDivisions = qMax(1, qRound(verticalLength / safeGridSize));
+        for (int i = 1; i < horizontalDivisions; ++i) {
+            const qreal t = qreal(i) / horizontalDivisions;
+            painter.drawLine(uvToPlane(facet, QPointF(t, 0)), uvToPlane(facet, QPointF(t, 1)));
+        }
+        for (int i = 1; i < verticalDivisions; ++i) {
+            const qreal t = qreal(i) / verticalDivisions;
+            painter.drawLine(uvToPlane(facet, QPointF(0, t)), uvToPlane(facet, QPointF(1, t)));
+        }
+        painter.restore();
     }
-    for (int i = 1; i < verticalDivisions; ++i) {
-        const qreal t = qreal(i) / verticalDivisions;
-        painter.drawLine(uvToPlane(facet, QPointF(0, t)), uvToPlane(facet, QPointF(1, t)));
-    }
-    painter.restore();
 
     if (selected && showHandles) {
         const QVector<QPointF> hs = handles(facet);
