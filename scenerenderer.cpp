@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPainterPathStroker>
+#include <QLineF>
 
 using namespace PlaneMath;
 
@@ -19,7 +20,7 @@ SceneRenderer::SceneRenderer(const CanvasDocument &doc)
 void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
                            const QVector<QPointF> &creationPoints,
                            const Plane *extrudePreview, bool editHandlesVisible,
-                           int hoveredPlane, qreal antsPhase, bool drawContent)
+                           int hoveredPlane, qreal antsPhase, bool drawContent, qreal gridSize)
 {
     m_viewScale = qMax(viewScale, 1e-6);
 
@@ -52,10 +53,10 @@ void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
         return;
     for (int i = 0; i < m_doc.planes().size(); ++i) {
         drawPlaneGuides(painter, m_doc.planes()[i], i == m_doc.selectedPlane(),
-                        i == hoveredPlane, editHandlesVisible);
+                        i == hoveredPlane, editHandlesVisible, gridSize);
     }
     if (extrudePreview)
-        drawPlaneGuides(painter, *extrudePreview, true, false, false);
+        drawPlaneGuides(painter, *extrudePreview, true, false, false, gridSize);
 
     painter.save();
     painter.setPen(QPen(QColor("#4bc3ff"), 2.0 / m_viewScale));
@@ -117,7 +118,7 @@ void SceneRenderer::renderFloatingImage(QPainter &painter, const FloatingImage &
 // 绘制面片的编辑辅助元素：外框、内部网格，以及选中且处于编辑
 // 工具时的控制点方块。
 void SceneRenderer::drawPlaneGuides(QPainter &painter, const Facet &facet, bool selected,
-                                    bool hovered, bool showHandles) const
+                                    bool hovered, bool showHandles, qreal gridSize) const
 {
     painter.save();
     const qreal lineWidth = (selected ? 1.7 : 1.0) / m_viewScale;
@@ -134,10 +135,26 @@ void SceneRenderer::drawPlaneGuides(QPainter &painter, const Facet &facet, bool 
     planeClip.closeSubpath();
     painter.setClipPath(planeClip, Qt::IntersectClip);
     painter.setPen(QPen(QColor(65, 182, 235, selected ? 145 : 80), 0.8 / m_viewScale));
-    constexpr int divisions = 8;
-    for (int i = 1; i < divisions; ++i) {
-        const qreal t = qreal(i) / divisions;
+    const qreal safeGridSize = qMax(gridSize, 1.0);
+    // Derive the number of cells from the current projected edge lengths.
+    // Control-point edits change `corner` while often leaving the unfolded
+    // `surfaceCorner` unchanged; using the latter would stretch the same
+    // number of grid lines. Averaging opposite edges keeps cell counts stable
+    // for perspective quads while allowing them to grow/shrink with the plane.
+    const qreal horizontalLength =
+        (QLineF(facet.corner[0], facet.corner[1]).length()
+         + QLineF(facet.corner[3], facet.corner[2]).length()) * 0.5;
+    const qreal verticalLength =
+        (QLineF(facet.corner[0], facet.corner[3]).length()
+         + QLineF(facet.corner[1], facet.corner[2]).length()) * 0.5;
+    const int horizontalDivisions = qMax(1, qRound(horizontalLength / safeGridSize));
+    const int verticalDivisions = qMax(1, qRound(verticalLength / safeGridSize));
+    for (int i = 1; i < horizontalDivisions; ++i) {
+        const qreal t = qreal(i) / horizontalDivisions;
         painter.drawLine(uvToPlane(facet, QPointF(t, 0)), uvToPlane(facet, QPointF(t, 1)));
+    }
+    for (int i = 1; i < verticalDivisions; ++i) {
+        const qreal t = qreal(i) / verticalDivisions;
         painter.drawLine(uvToPlane(facet, QPointF(0, t)), uvToPlane(facet, QPointF(1, t)));
     }
     painter.restore();

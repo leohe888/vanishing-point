@@ -30,7 +30,8 @@ public:
                 const QVector<QPointF> &creationPoints = {},
                 const Plane *extrudePreview = nullptr,
                 bool editHandlesVisible = false,
-                int hoveredPlane = -1, qreal antsPhase = 0, bool drawContent = true);
+                int hoveredPlane = -1, qreal antsPhase = 0, bool drawContent = true,
+                qreal gridSize = 50.0);
 
     // 各投影片段的并集外轮廓，不包含平面之间的内部接缝。
     static QPainterPath floatingImageOutline(const FloatingImage &image);
@@ -42,7 +43,7 @@ private:
     // 绘制面片的编辑辅助元素：外框、内部网格，以及选中且处于编辑
     // 工具时的控制点方块。
     void drawPlaneGuides(QPainter &painter, const Facet &facet, bool selected,
-                         bool hovered, bool showHandles) const;
+                         bool hovered, bool showHandles, qreal gridSize) const;
 
     const CanvasDocument &m_doc;   // 被渲染的文档（只读）
     qreal m_viewScale = 1.0;       // 当前视图缩放（用于辅助层线宽换算）

@@ -38,6 +38,7 @@ public slots:
     void setBrushDiameter(int value) { m_paint.setDiameter(value); m_cloneTool.setDiameter(value); }
     void setBrushHardness(int value) { m_paint.setHardness(value); m_cloneTool.setHardness(value); }
     void setBrushOpacity(int value) { m_paint.setOpacity(value); m_cloneTool.setOpacity(value); }
+    void setGridSize(int value) { m_gridSize = qMax(1, value); update(); }
     void setCloneAligned(bool aligned);
     void setBrushColor(const QColor &color) { m_paint.setColor(color); }
     void clearPainting();                  // 清除绘画层上的绘画内容
@@ -112,6 +113,7 @@ private:
     Facet m_brushFacet;                       // 画笔锁定的面片快照
     int m_hoverPlane = -1;                    // 当前悬停的平面索引
     qreal m_scale = 1.0;                      // 视图缩放比例
+    qreal m_gridSize = 50.0;                  // 平面展开坐标中的网格边长
     QPointF m_offset;                         // 视图居中偏移
     bool m_stateChanged = false;              // 自上次提交以来状态是否已变化
 };

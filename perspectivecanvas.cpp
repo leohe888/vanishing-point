@@ -322,7 +322,7 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
     SceneRenderer renderer(m_doc);
     renderer.render(painter, m_scale, true, m_creationPoints,
                     m_hasExtrudePreview ? &m_extrudePreview : nullptr,
-                    m_tool == EditPlane, m_hoverPlane, m_antsPhase, false);
+                    m_tool == EditPlane, m_hoverPlane, m_antsPhase, false, m_gridSize);
     if (m_tool == TransformTool && hasSelectedImage()) {
         const FloatingImage &image = m_doc.image(m_doc.selectedImage());
         painter.save();

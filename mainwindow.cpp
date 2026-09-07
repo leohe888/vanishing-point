@@ -113,6 +113,7 @@ void MainWindow::buildUi()
     m_diameter = addSlider(tr("直径"), 2, 200, 42, &m_diameterRow);
     m_hardness = addSlider(tr("硬度"), 0, 100, 75, &m_hardnessRow);
     m_opacity = addSlider(tr("不透明度"), 1, 100, 100, &m_opacityRow);
+    m_gridSize = addSlider(tr("网格大小"), 10, 200, 50, &m_gridSizeRow);
     auto *aligned = new QCheckBox(tr("对齐"), side);
     aligned->setChecked(true);
     aligned->setToolTip(tr("勾选：松开鼠标后源点继续跟随；取消：每一笔从最初的源点重新取样"));
@@ -192,6 +193,7 @@ void MainWindow::buildUi()
     connect(m_diameter, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushDiameter);
     connect(m_hardness, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushHardness);
     connect(m_opacity, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushOpacity);
+    connect(m_gridSize, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setGridSize);
     connect(aligned, &QCheckBox::toggled, m_canvas, &PerspectiveCanvas::setCloneAligned);
     connect(colorButton, &QPushButton::clicked, this, &MainWindow::chooseColor);
     connect(openAction, &QAction::triggered, this, [this] {
@@ -231,6 +233,8 @@ void MainWindow::updateToolOptions(int toolId)
     const bool isBrushTool = toolId == PerspectiveCanvas::BrushTool;
     const bool isCloneTool = toolId == PerspectiveCanvas::CloneStampTool;
     const bool showSettings = isBrushTool || isCloneTool;
+    const bool showGridSettings = toolId == PerspectiveCanvas::CreatePlane
+                                  || toolId == PerspectiveCanvas::EditPlane;
 
     m_brushTitle->setVisible(showSettings);
     m_diameterRow->setVisible(showSettings);
@@ -241,6 +245,8 @@ void MainWindow::updateToolOptions(int toolId)
     m_opacity->setVisible(showSettings);
     m_colorRow->setVisible(isBrushTool);
     m_cloneAligned->setVisible(isCloneTool);
+    m_gridSizeRow->setVisible(showGridSettings);
+    m_gridSize->setVisible(showGridSettings);
 }
 
 // 打开颜色对话框，选择画笔颜色并同步更新色块预览
