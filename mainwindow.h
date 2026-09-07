@@ -31,6 +31,7 @@ private:
     QSlider *m_gridSize = nullptr;         // 平面网格大小滑块
     QLabel *m_colorSwatch = nullptr;       // 当前画笔颜色的色块预览
     QWidget *m_brushTitle = nullptr;       // “笔刷设置”标题（按工具显隐）
+    QWidget *m_planeTitle = nullptr;       // “平面设置”标题（按工具和文档显隐）
     QWidget *m_diameterRow = nullptr;      // 直径“标签+数值”行（按工具显隐）
     QWidget *m_hardnessRow = nullptr;      // 硬度“标签+数值”行（按工具显隐）
     QWidget *m_opacityRow = nullptr;       // 不透明度“标签+数值”行（按工具显隐）

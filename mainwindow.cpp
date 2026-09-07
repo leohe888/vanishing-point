@@ -78,7 +78,7 @@ void MainWindow::buildUi()
         m_tools->addButton(button, i);
         sideLayout->addWidget(button);
     }
-    m_tools->button(0)->setChecked(true);
+    // 启动时尚未打开图片，不选择任何工具；打开图片后再默认进入创建工具。
     for (QAbstractButton *button : m_tools->buttons())
         button->setEnabled(false);
 
@@ -113,6 +113,9 @@ void MainWindow::buildUi()
     m_diameter = addSlider(tr("直径"), 2, 200, 42, &m_diameterRow);
     m_hardness = addSlider(tr("硬度"), 0, 100, 75, &m_hardnessRow);
     m_opacity = addSlider(tr("不透明度"), 1, 100, 100, &m_opacityRow);
+    m_planeTitle = new QLabel(tr("平面设置"), side);
+    m_planeTitle->setObjectName("sectionTitle");
+    sideLayout->addWidget(m_planeTitle);
     m_gridSize = addSlider(tr("网格大小"), 10, 200, 50, &m_gridSizeRow);
     auto *aligned = new QCheckBox(tr("对齐"), side);
     aligned->setChecked(true);
@@ -221,10 +224,14 @@ void MainWindow::buildUi()
                 for (QAbstractButton *button : m_tools->buttons())
                     button->setEnabled(available && (m_tools->id(button) != PerspectiveCanvas::TransformTool
                                                      || m_canvas->hasSelectedImage()));
+                if (available && !m_tools->checkedButton())
+                    m_tools->button(PerspectiveCanvas::CreatePlane)->click();
+                if (!available)
+                    updateToolOptions(-1);
             });
     connect(m_canvas, &PerspectiveCanvas::statusMessage, statusBar(), &QStatusBar::showMessage);
-    updateToolOptions(PerspectiveCanvas::CreatePlane);
-    statusBar()->showMessage(tr("使用创建平面工具依次点击四个点"));
+    updateToolOptions(-1);
+    statusBar()->showMessage(tr("请打开一张图片开始操作"));
 }
 
 void MainWindow::updateToolOptions(int toolId)
@@ -247,6 +254,7 @@ void MainWindow::updateToolOptions(int toolId)
     m_cloneAligned->setVisible(isCloneTool);
     m_gridSizeRow->setVisible(showGridSettings);
     m_gridSize->setVisible(showGridSettings);
+    m_planeTitle->setVisible(showGridSettings);
 }
 
 // 打开颜色对话框，选择画笔颜色并同步更新色块预览
