@@ -595,7 +595,27 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             !planePolygon(m_doc.planes()[candidate].corner).containsPoint(point, Qt::OddEvenFill)) {
             candidate = -1;
         }
-        if (candidate < 0) {
+        // Ctrl+click cycles through every plane under the cursor, from the
+        // current selection toward lower (older) layers. A handle/edge hit
+        // keeps its normal drag behavior, so Ctrl+drag can still extrude.
+        const bool cycleSelection = (event->modifiers() & Qt::ControlModifier)
+                                     && m_dragHandle < 0 && m_dragEdge < 0;
+        if (cycleSelection) {
+            QVector<int> hits;
+            for (int i = m_doc.planes().size() - 1; i >= 0; --i) {
+                if (planePolygon(m_doc.planes()[i].corner)
+                        .containsPoint(point, Qt::OddEvenFill))
+                    hits.append(i);
+            }
+            if (!hits.isEmpty()) {
+                const int current = hits.indexOf(m_doc.selectedPlane());
+                candidate = current >= 0 ? hits[(current + 1) % hits.size()] : hits.first();
+            } else {
+                candidate = -1;
+            }
+            m_dragHandle = candidate >= 0 ? handleAt(m_doc.planes()[candidate], point, 10.0 / m_scale) : -1;
+            m_dragEdge = candidate >= 0 ? edgeAt(m_doc.planes()[candidate], point, 9.0 / m_scale) : -1;
+        } else if (candidate < 0) {
             candidate = planeAt(m_doc.planes(), point);
             if (candidate >= 0) {
                 m_dragHandle = handleAt(m_doc.planes()[candidate], point, 10.0 / m_scale);
