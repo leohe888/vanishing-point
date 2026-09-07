@@ -43,7 +43,8 @@ private:
     // 绘制面片的编辑辅助元素：外框、内部网格，以及选中且处于编辑
     // 工具时的控制点方块。
     void drawPlaneGuides(QPainter &painter, const Facet &facet, bool selected,
-                         bool hovered, bool showHandles, qreal gridSize) const;
+                         bool hovered, bool showHandles, qreal gridSize,
+                         int planeIndex = -1) const;
 
     const CanvasDocument &m_doc;   // 被渲染的文档（只读）
     qreal m_viewScale = 1.0;       // 当前视图缩放（用于辅助层线宽换算）

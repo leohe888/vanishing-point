@@ -586,10 +586,38 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     }
 
     if (m_tool == EditPlane) {
+        auto sharedEdgeFor = [this](int index) {
+            if (index < 0 || index >= m_doc.planes().size())
+                return -1;
+            const Plane &plane = m_doc.planes()[index];
+            for (int edge = 0; edge < 4; ++edge) {
+                const QPointF a = plane.corner[edge];
+                const QPointF b = plane.corner[(edge + 1) % 4];
+                for (int other = 0; other < m_doc.planes().size(); ++other) {
+                    if (other == index)
+                        continue;
+                    for (int oe = 0; oe < 4; ++oe) {
+                        const QPointF oa = m_doc.planes()[other].corner[oe];
+                        const QPointF ob = m_doc.planes()[other].corner[(oe + 1) % 4];
+                        if ((QLineF(a, oa).length() < 0.01 && QLineF(b, ob).length() < 0.01) ||
+                            (QLineF(a, ob).length() < 0.01 && QLineF(b, oa).length() < 0.01))
+                            return edge;
+                    }
+                }
+            }
+            return -1;
+        };
         int candidate = m_doc.selectedPlane();
         if (candidate >= 0) {
             m_dragHandle = handleAt(m_doc.planes()[candidate], point, 10.0 / m_scale);
             m_dragEdge = edgeAt(m_doc.planes()[candidate], point, 9.0 / m_scale);
+        }
+        const int sharedEdge = sharedEdgeFor(candidate);
+        if (sharedEdge >= 0 &&
+            (m_dragHandle == sharedEdge || m_dragHandle == (sharedEdge + 1) % 4 ||
+             m_dragHandle == 4 + sharedEdge || m_dragEdge == sharedEdge)) {
+            m_dragHandle = -1;
+            m_dragEdge = -1;
         }
         if (m_dragHandle < 0 && candidate >= 0 && m_dragEdge < 0 &&
             !planePolygon(m_doc.planes()[candidate].corner).containsPoint(point, Qt::OddEvenFill)) {
@@ -622,8 +650,23 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
                 m_dragEdge = edgeAt(m_doc.planes()[candidate], point, 9.0 / m_scale);
             }
         }
+        const int finalSharedEdge = sharedEdgeFor(candidate);
+        if (finalSharedEdge >= 0 &&
+            (m_dragHandle == finalSharedEdge || m_dragHandle == (finalSharedEdge + 1) % 4 ||
+             m_dragHandle == 4 + finalSharedEdge || m_dragEdge == finalSharedEdge)) {
+            m_dragHandle = -1;
+            m_dragEdge = -1;
+        }
         m_doc.setSelectedPlane(candidate);
         if (candidate >= 0) {
+            // Adjacent planes created from a shared edge are locked as a pair:
+            // clicking their interior may select them, but cannot translate
+            // either plane as a whole. Their non-shared control points remain
+            // available for shape edits.
+            if (sharedEdgeFor(candidate) >= 0 && m_dragHandle < 0 && m_dragEdge < 0) {
+                update();
+                return;
+            }
             m_doc.beginEdit();
             m_gesture = Gesture::Plane;
             const bool extruding = (event->modifiers() & Qt::ControlModifier) && m_dragEdge >= 0;

@@ -53,7 +53,7 @@ void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
         return;
     for (int i = 0; i < m_doc.planes().size(); ++i) {
         drawPlaneGuides(painter, m_doc.planes()[i], i == m_doc.selectedPlane(),
-                        i == hoveredPlane, editHandlesVisible, gridSize);
+                        i == hoveredPlane, editHandlesVisible, gridSize, i);
     }
     if (extrudePreview)
         drawPlaneGuides(painter, *extrudePreview, true, false, false, gridSize);
@@ -118,7 +118,8 @@ void SceneRenderer::renderFloatingImage(QPainter &painter, const FloatingImage &
 // 绘制面片的编辑辅助元素：外框、内部网格，以及选中且处于编辑
 // 工具时的控制点方块。
 void SceneRenderer::drawPlaneGuides(QPainter &painter, const Facet &facet, bool selected,
-                                    bool hovered, bool showHandles, qreal gridSize) const
+                                    bool hovered, bool showHandles, qreal gridSize,
+                                    int planeIndex) const
 {
     painter.save();
     const qreal lineWidth = (selected ? 1.7 : 1.0) / m_viewScale;
@@ -160,7 +161,32 @@ void SceneRenderer::drawPlaneGuides(QPainter &painter, const Facet &facet, bool 
 
     if (selected && showHandles) {
         const QVector<QPointF> hs = handles(facet);
+        int sharedEdge = -1;
+        if (planeIndex >= 0) {
+            for (int edge = 0; edge < 4 && sharedEdge < 0; ++edge) {
+                const QPointF a = facet.corner[edge];
+                const QPointF b = facet.corner[(edge + 1) % 4];
+                for (int other = 0; other < m_doc.planes().size(); ++other) {
+                    if (other == planeIndex)
+                        continue;
+                    for (int oe = 0; oe < 4; ++oe) {
+                        const QPointF oa = m_doc.planes()[other].corner[oe];
+                        const QPointF ob = m_doc.planes()[other].corner[(oe + 1) % 4];
+                        if ((QLineF(a, oa).length() < 0.01 && QLineF(b, ob).length() < 0.01) ||
+                            (QLineF(a, ob).length() < 0.01 && QLineF(b, oa).length() < 0.01)) {
+                            sharedEdge = edge;
+                            break;
+                        }
+                    }
+                    if (sharedEdge >= 0)
+                        break;
+                }
+            }
+        }
         for (int i = 0; i < hs.size(); ++i) {
+            if (sharedEdge >= 0 &&
+                (i == sharedEdge || i == (sharedEdge + 1) % 4 || i == 4 + sharedEdge))
+                continue;
             const qreal radius = (i < 4 ? 5.5 : 4.5) / m_viewScale;
             painter.setPen(QPen(QColor("#0e526e"), 1.0 / m_viewScale));
             painter.setBrush(i < 4 ? QColor("#f3f8fa") : QColor("#4bc3ff"));
