@@ -863,13 +863,15 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
         event->accept();
     } else if (event->key() == Qt::Key_Escape) {
         cancelInteraction();
-    } else if (event->key() == Qt::Key_Delete && hasSelectedImage()) {
+    } else if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace)
+               && hasSelectedImage()) {
         commitInteraction();
         m_doc.removeFloatingImage(m_doc.selectedImage());
         emit statusMessage(tr("已删除选中的图像"), 3000);
         update();
         event->accept();
-    } else if (event->key() == Qt::Key_Delete && m_tool == EditPlane && m_doc.selectedPlane() >= 0) {
+    } else if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace)
+               && m_tool == EditPlane && m_doc.selectedPlane() >= 0) {
         commitInteraction();
         m_doc.removePlane(m_doc.selectedPlane());
         update();
