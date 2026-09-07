@@ -152,6 +152,22 @@ int CanvasDocument::addFloatingImage(const QImage &image)
     return m_selectedImage;
 }
 
+// 删除浮动图像，并将选中项移动到删除位置上的下一张（若无则为上一张）。
+void CanvasDocument::removeFloatingImage(int index)
+{
+    if (index < 0 || index >= m_images.size())
+        return;
+
+    m_images.removeAt(index);
+    int nextSelection = m_selectedImage;
+    if (m_selectedImage == index)
+        nextSelection = m_images.isEmpty() ? -1 : qMin(index, m_images.size() - 1);
+    else if (m_selectedImage > index)
+        --nextSelection;
+    setSelectedImage(nextSelection);
+    commitHistory();
+}
+
 // 仅移动图像位置（不改变吸附状态）
 void CanvasDocument::setSelectedImage(int index)
 {

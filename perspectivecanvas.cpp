@@ -835,7 +835,7 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
     update();
 }
 
-// 键盘事件：Ctrl+V 粘贴图像、Esc 取消当前操作、Delete 删除选中平面
+// 键盘事件：Ctrl+V 粘贴图像、Esc 取消当前操作、Delete 删除选中图像/平面
 void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
 {
     if (event->matches(QKeySequence::Paste)) {
@@ -843,10 +843,17 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
         event->accept();
     } else if (event->key() == Qt::Key_Escape) {
         cancelInteraction();
+    } else if (event->key() == Qt::Key_Delete && hasSelectedImage()) {
+        commitInteraction();
+        m_doc.removeFloatingImage(m_doc.selectedImage());
+        emit statusMessage(tr("已删除选中的图像"), 3000);
+        update();
+        event->accept();
     } else if (event->key() == Qt::Key_Delete && m_tool == EditPlane && m_doc.selectedPlane() >= 0) {
         commitInteraction();
         m_doc.removePlane(m_doc.selectedPlane());
         update();
+        event->accept();
     } else {
         QWidget::keyPressEvent(event);
     }
