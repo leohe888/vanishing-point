@@ -2,10 +2,12 @@
 #include "mainwindow.h"
 
 #include <QApplication>
+#include <QIcon>
 
 int main(int argc, char *argv[])
 {
     QApplication a(argc, argv); // Qt 应用对象：管理事件循环与全局资源
+    a.setWindowIcon(QIcon(QStringLiteral(":/icons/app.ico")));
     MainWindow w;               // 主窗口：包含工具栏、侧边面板与透视画布
     w.show();
     return QApplication::exec(); // 进入事件循环，直至窗口关闭

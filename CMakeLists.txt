@@ -34,6 +34,13 @@ add_library(VanishingWidgets STATIC
 target_link_libraries(VanishingWidgets PUBLIC VanishingCore Qt::Widgets)
 
 qt_add_executable(VanisingPoint WIN32 MACOSX_BUNDLE main.cpp)
+qt_add_resources(VanisingPoint app_resources
+    PREFIX "/icons"
+    FILES app.ico
+)
+if(WIN32)
+    target_sources(VanisingPoint PRIVATE app.rc)
+endif()
 target_link_libraries(VanisingPoint PRIVATE VanishingWidgets)
 
 option(VP_BUILD_TESTS "Build editor and architecture regression tests" OFF)
