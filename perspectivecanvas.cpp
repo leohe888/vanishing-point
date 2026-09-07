@@ -859,27 +859,3 @@ void PerspectiveCanvas::keyPressEvent(QKeyEvent *event)
     }
 }
 
-// Tab / Shift+Tab：在平面之间循环切换选中（仅编辑平面工具）
-bool PerspectiveCanvas::focusNextPrevChild(bool next)
-{
-    if (m_tool != EditPlane || m_doc.planes().isEmpty())
-        return QWidget::focusNextPrevChild(next);
-
-    const int planeCount = m_doc.planes().size();
-    int selected = m_doc.selectedPlane();
-    if (selected < 0) {
-        selected = next ? 0 : planeCount - 1;
-    } else if (next) {
-        selected = (selected + 1) % planeCount;
-    } else {
-        selected = (selected - 1 + planeCount) % planeCount;
-    }
-    m_doc.setSelectedPlane(selected);
-    update();
-    emit statusMessage(tr("已选择：%1（%2/%3）")
-                           .arg(m_doc.planes()[selected].name)
-                           .arg(selected + 1)
-                           .arg(planeCount),
-                       2500);
-    return true;
-}

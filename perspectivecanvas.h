@@ -61,7 +61,6 @@ protected:
     void mouseMoveEvent(QMouseEvent *) override;  // 鼠标移动：拖动/绘制/悬停光标
     void mouseReleaseEvent(QMouseEvent *) override; // 鼠标释放：提交历史记录
     void keyPressEvent(QKeyEvent *) override;     // 键盘事件：粘贴/Esc 取消/Delete 删除平面
-    bool focusNextPrevChild(bool next) override;  // Tab 键在平面之间切换选中
     void dragEnterEvent(QDragEnterEvent *) override; // 拖放进入：接受本地图像文件
     void dropEvent(QDropEvent *) override;        // 拖放放下：打开图像或生成浮动图像
 
