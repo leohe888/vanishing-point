@@ -152,6 +152,12 @@ int CanvasDocument::addFloatingImage(const QImage &image)
     return m_selectedImage;
 }
 
+void CanvasDocument::lockPlaneEdge(int index, int edge)
+{
+    if (index >= 0 && index < m_planes.size() && edge >= 0 && edge < 4)
+        m_planes[index].lockedEdges |= quint8(1u << edge);
+}
+
 // 删除浮动图像，并将选中项移动到删除位置上的下一张（若无则为上一张）。
 void CanvasDocument::removeFloatingImage(int index)
 {

@@ -161,9 +161,12 @@ void SceneRenderer::drawPlaneGuides(QPainter &painter, const Facet &facet, bool 
 
     if (selected && showHandles) {
         const QVector<QPointF> hs = handles(facet);
-        int sharedEdge = -1;
+        quint8 sharedEdges = 0;
         if (planeIndex >= 0) {
-            for (int edge = 0; edge < 4 && sharedEdge < 0; ++edge) {
+            const Plane &plane = m_doc.planes()[planeIndex];
+            for (int edge = 0; edge < 4; ++edge)
+                if (plane.lockedEdges & quint8(1u << edge)) sharedEdges |= quint8(1u << edge);
+            for (int edge = 0; edge < 4; ++edge) {
                 const QPointF a = facet.corner[edge];
                 const QPointF b = facet.corner[(edge + 1) % 4];
                 for (int other = 0; other < m_doc.planes().size(); ++other) {
@@ -174,18 +177,17 @@ void SceneRenderer::drawPlaneGuides(QPainter &painter, const Facet &facet, bool 
                         const QPointF ob = m_doc.planes()[other].corner[(oe + 1) % 4];
                         if ((QLineF(a, oa).length() < 0.01 && QLineF(b, ob).length() < 0.01) ||
                             (QLineF(a, ob).length() < 0.01 && QLineF(b, oa).length() < 0.01)) {
-                            sharedEdge = edge;
+                            sharedEdges |= quint8(1u << edge);
                             break;
                         }
                     }
-                    if (sharedEdge >= 0)
-                        break;
                 }
             }
         }
         for (int i = 0; i < hs.size(); ++i) {
-            if (sharedEdge >= 0 &&
-                (i == sharedEdge || i == (sharedEdge + 1) % 4 || i == 4 + sharedEdge))
+            if ((i < 4 && ((sharedEdges & quint8(1u << i)) ||
+                           (sharedEdges & quint8(1u << ((i + 3) % 4))))) ||
+                (i >= 4 && (sharedEdges & quint8(1u << (i - 4)))))
                 continue;
             const qreal radius = (i < 4 ? 5.5 : 4.5) / m_viewScale;
             painter.setPen(QPen(QColor("#0e526e"), 1.0 / m_viewScale));

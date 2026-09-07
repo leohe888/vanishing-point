@@ -26,6 +26,7 @@ struct Facet {
 // 浮动图像各自携带几何快照。平面可以被自由增删改而不波及内容。
 struct Plane : Facet {
     int surfaceGroup = -1;  // 所属的展开曲面分组（共享曲面的相邻平面同组）
+    quint8 lockedEdges = 0; // 与相邻垂直平面共用、不可编辑的边（位掩码）
     QString name;           // 显示用的平面名称
 };
 

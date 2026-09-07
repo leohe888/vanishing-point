@@ -332,6 +332,7 @@ Plane makePerpendicularPlane(const Plane &source, int edge,
 {
     Plane result;
     result.surfaceGroup = source.surfaceGroup;
+    result.lockedEdges = 1u; // 新平面的第 0 条边就是与源平面共用的边
     result.surfaceCorner[0] = source.surfaceCorner[edge];
     result.surfaceCorner[1] = source.surfaceCorner[(edge + 1) % 4];
     result.surfaceCorner[2] = result.surfaceCorner[1];

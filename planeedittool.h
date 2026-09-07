@@ -9,6 +9,7 @@ public:
     bool update(const QPointF &point, Plane *result) const;
     const Plane &start() const { return m_start; }
     bool extruding() const { return m_extrude; }
+    int edge() const { return m_edge; }
 
 private:
     Plane m_start;

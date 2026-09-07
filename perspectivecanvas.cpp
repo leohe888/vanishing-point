@@ -586,10 +586,11 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     }
 
     if (m_tool == EditPlane) {
-        auto sharedEdgeFor = [this](int index) {
+        auto sharedEdgesFor = [this](int index) {
             if (index < 0 || index >= m_doc.planes().size())
-                return -1;
+                return quint8(0);
             const Plane &plane = m_doc.planes()[index];
+            quint8 result = plane.lockedEdges;
             for (int edge = 0; edge < 4; ++edge) {
                 const QPointF a = plane.corner[edge];
                 const QPointF b = plane.corner[(edge + 1) % 4];
@@ -601,21 +602,26 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
                         const QPointF ob = m_doc.planes()[other].corner[(oe + 1) % 4];
                         if ((QLineF(a, oa).length() < 0.01 && QLineF(b, ob).length() < 0.01) ||
                             (QLineF(a, ob).length() < 0.01 && QLineF(b, oa).length() < 0.01))
-                            return edge;
+                            result |= quint8(1u << edge);
+                            break;
                     }
                 }
             }
-            return -1;
+            return result;
         };
         int candidate = m_doc.selectedPlane();
         if (candidate >= 0) {
             m_dragHandle = handleAt(m_doc.planes()[candidate], point, 10.0 / m_scale);
             m_dragEdge = edgeAt(m_doc.planes()[candidate], point, 9.0 / m_scale);
         }
-        const int sharedEdge = sharedEdgeFor(candidate);
-        if (sharedEdge >= 0 &&
-            (m_dragHandle == sharedEdge || m_dragHandle == (sharedEdge + 1) % 4 ||
-             m_dragHandle == 4 + sharedEdge || m_dragEdge == sharedEdge)) {
+        const quint8 sharedEdges = sharedEdgesFor(candidate);
+        auto isLocked = [sharedEdges](int handle, int edge) {
+            return edge >= 0 && (sharedEdges & quint8(1u << edge))
+                   && (handle < 0 || handle == edge || handle == (edge + 1) % 4 || handle == 4 + edge);
+        };
+        if (isLocked(m_dragHandle, m_dragEdge) ||
+            (m_dragHandle >= 0 && (((sharedEdges >> m_dragHandle) & 1u) ||
+                                   (m_dragHandle < 4 && ((sharedEdges >> ((m_dragHandle + 3) % 4)) & 1u))))) {
             m_dragHandle = -1;
             m_dragEdge = -1;
         }
@@ -650,10 +656,12 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
                 m_dragEdge = edgeAt(m_doc.planes()[candidate], point, 9.0 / m_scale);
             }
         }
-        const int finalSharedEdge = sharedEdgeFor(candidate);
-        if (finalSharedEdge >= 0 &&
-            (m_dragHandle == finalSharedEdge || m_dragHandle == (finalSharedEdge + 1) % 4 ||
-             m_dragHandle == 4 + finalSharedEdge || m_dragEdge == finalSharedEdge)) {
+        const quint8 finalSharedEdges = sharedEdgesFor(candidate);
+        if ((m_dragEdge >= 0 && (finalSharedEdges & quint8(1u << m_dragEdge))) ||
+            (m_dragHandle >= 4 && (finalSharedEdges & quint8(1u << (m_dragHandle - 4)))) ||
+            (m_dragHandle < 4 && m_dragHandle >= 0 &&
+             ((finalSharedEdges & quint8(1u << m_dragHandle)) ||
+              (finalSharedEdges & quint8(1u << ((m_dragHandle + 3) % 4)))))) {
             m_dragHandle = -1;
             m_dragEdge = -1;
         }
@@ -663,7 +671,7 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             // clicking their interior may select them, but cannot translate
             // either plane as a whole. Their non-shared control points remain
             // available for shape edits.
-            if (sharedEdgeFor(candidate) >= 0 && m_dragHandle < 0 && m_dragEdge < 0) {
+            if (sharedEdgesFor(candidate) != 0 && m_dragHandle < 0 && m_dragEdge < 0) {
                 update();
                 return;
             }
@@ -880,6 +888,9 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
             m_extrudePreview.name = tr("平面 %1").arg(m_doc.planes().size() + 1);
             const int index = m_doc.appendPlane(m_extrudePreview);
             if (index >= 0) {
+                const int sourceIndex = m_doc.selectedPlane();
+                if (sourceIndex >= 0 && sourceIndex != index)
+                    m_doc.lockPlaneEdge(sourceIndex, m_planeTool.edge());
                 m_doc.setSelectedPlane(index);
                 m_stateChanged = true;
                 emit statusMessage(tr("已创建相邻的垂直平面"), 3000);
