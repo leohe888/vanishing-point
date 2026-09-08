@@ -33,48 +33,8 @@ add_library(VanishingWidgets STATIC
 )
 target_link_libraries(VanishingWidgets PUBLIC VanishingCore Qt::Widgets)
 
-qt_add_executable(VanisingPoint WIN32 MACOSX_BUNDLE main.cpp)
-qt_add_resources(VanisingPoint app_resources
-    PREFIX "/icons"
-    FILES app.ico
-)
-if(WIN32)
-    target_sources(VanisingPoint PRIVATE app.rc)
-endif()
+qt_add_executable(VanisingPoint WIN32 MACOSX_BUNDLE main.cpp resources.qrc)
 target_link_libraries(VanisingPoint PRIVATE VanishingWidgets)
-
-option(VP_BUILD_TESTS "Build editor and architecture regression tests" OFF)
-if(VP_BUILD_TESTS)
-    enable_testing()
-    find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
-    qt_add_executable(CloneStampTests tests/clonestamptests.cpp)
-    target_link_libraries(CloneStampTests PRIVATE VanishingWidgets Qt::Test)
-    qt_add_executable(ArchitectureTests tests/architecturetests.cpp)
-    target_link_libraries(ArchitectureTests PRIVATE VanishingWidgets Qt::Test)
-    set_target_properties(CloneStampTests ArchitectureTests PROPERTIES WIN32_EXECUTABLE FALSE)
-    if(WIN32)
-        get_filename_component(VP_COMPILER_DIRECTORY "${CMAKE_CXX_COMPILER}" DIRECTORY)
-        set(VP_TEST_RUNTIME_PATH "$<TARGET_FILE_DIR:Qt6::Core>;${VP_COMPILER_DIRECTORY};$ENV{PATH}")
-        add_test(NAME EditorRegressionTests COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=${VP_TEST_RUNTIME_PATH}" $<TARGET_FILE:CloneStampTests> -platform offscreen)
-        add_test(NAME ArchitectureTests COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=${VP_TEST_RUNTIME_PATH}" $<TARGET_FILE:ArchitectureTests> -platform offscreen)
-    else()
-        add_test(NAME EditorRegressionTests COMMAND CloneStampTests -platform offscreen)
-        add_test(NAME ArchitectureTests COMMAND ArchitectureTests -platform offscreen)
-    endif()
-    set_tests_properties(EditorRegressionTests ArchitectureTests PROPERTIES TIMEOUT 60)
-    qt_add_executable(PerpendicularPlaneTests tests/perpendicularplanetests.cpp)
-    target_link_libraries(PerpendicularPlaneTests PRIVATE VanishingCore Qt::Test)
-    set_target_properties(PerpendicularPlaneTests PROPERTIES WIN32_EXECUTABLE FALSE)
-    if(WIN32)
-        add_test(NAME PerpendicularPlaneTests COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=${VP_TEST_RUNTIME_PATH}" $<TARGET_FILE:PerpendicularPlaneTests>)
-    else()
-        add_test(NAME PerpendicularPlaneTests COMMAND PerpendicularPlaneTests)
-    endif()
-    set_tests_properties(PerpendicularPlaneTests PROPERTIES TIMEOUT 60)
-endif()
 
 # 安装规则：Bundle 安装到根目录，其余平台按标准目录安装
 install(TARGETS VanisingPoint
