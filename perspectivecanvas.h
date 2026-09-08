@@ -116,6 +116,7 @@ private:
     PaintEngine m_paint;                      // 笔刷引擎
     CloneTool m_cloneTool;
     QVector<QPointF> m_creationPoints;        // 创建平面过程中已点击的角点
+    QPointF m_cursorPoint;                    // 当前光标位置（画布坐标），用于橡皮筋预览
     Tool m_tool = CreatePlane;                // 当前工具
     int m_dragHandle = -1;                    // 正在拖动的控制点索引
     int m_dragEdge = -1;                      // 正在拖动的边缘索引

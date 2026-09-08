@@ -26,12 +26,14 @@ public:
     // extrudePreview 为垂直平面的拖出预览（可为空）；
     // editHandlesVisible 控制选中平面的控制点是否显示；
     // hoveredPlane 为当前悬停平面的索引（用于高亮）。
+    // cursorPoint 为当前光标位置（画布坐标），仅用于创建平面时的橡皮筋预览，
+    // 传空点表示不绘制。
     void render(QPainter &painter, qreal viewScale, bool showGuides,
                 const QVector<QPointF> &creationPoints = {},
                 const Plane *extrudePreview = nullptr,
                 bool editHandlesVisible = false,
                 int hoveredPlane = -1, qreal antsPhase = 0, bool drawContent = true,
-                qreal gridSize = 50.0);
+                qreal gridSize = 50.0, const QPointF &cursorPoint = QPointF());
 
     // 各投影片段的并集外轮廓，不包含平面之间的内部接缝。
     static QPainterPath floatingImageOutline(const FloatingImage &image);

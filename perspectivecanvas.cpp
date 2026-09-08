@@ -644,7 +644,8 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
     SceneRenderer renderer(m_doc);
     renderer.render(painter, m_scale, true, m_creationPoints,
                     m_hasExtrudePreview ? &m_extrudePreview : nullptr,
-                    m_tool == EditPlane, m_hoverPlane, m_antsPhase, false, m_gridSize);
+                    m_tool == EditPlane, m_hoverPlane, m_antsPhase, false, m_gridSize,
+                    m_tool == CreatePlane ? m_cursorPoint : QPointF());
     if (m_tool == MarqueeTool && !m_selectionRect.isEmpty()) {
         painter.save();
         painter.resetTransform();
@@ -1140,6 +1141,10 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
+    m_cursorPoint = point;
+    // 创建平面时橡皮筋要跟着光标走，因此每次移动都要重绘。
+    if (m_tool == CreatePlane && !m_creationPoints.isEmpty())
+        update();
     if (m_tool == MarqueeTool && m_gesture == Gesture::Selection &&
         (event->buttons() & Qt::LeftButton)) {
         updateSelection(point, event->modifiers());

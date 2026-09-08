@@ -11,6 +11,10 @@
 
 using namespace PlaneMath;
 
+// 控制点（创建平面的角点标记、平面编辑的角点与边缘中心点）统一的半边长，
+// 单位为画布像素，绘制时再按视图缩放换算。
+constexpr qreal HandleHalfSize = 4.0;
+
 SceneRenderer::SceneRenderer(const CanvasDocument &doc)
     : m_doc(doc)
 {
@@ -20,7 +24,8 @@ SceneRenderer::SceneRenderer(const CanvasDocument &doc)
 void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
                            const QVector<QPointF> &creationPoints,
                            const Plane *extrudePreview, bool editHandlesVisible,
-                           int hoveredPlane, qreal antsPhase, bool drawContent, qreal gridSize)
+                           int hoveredPlane, qreal antsPhase, bool drawContent, qreal gridSize,
+                           const QPointF &cursorPoint)
 {
     m_viewScale = qMax(viewScale, 1e-6);
 
@@ -58,15 +63,32 @@ void SceneRenderer::render(QPainter &painter, qreal viewScale, bool showGuides,
     if (extrudePreview)
         drawPlaneGuides(painter, *extrudePreview, true, false, false, gridSize);
 
+    // 先画连线：已确定角点之间的边，以及连到光标的预览边。
     painter.save();
     painter.setPen(QPen(QColor("#4bc3ff"), 2.0 / m_viewScale));
-    painter.setBrush(QColor("#4bc3ff"));
-    for (int i = 0; i < creationPoints.size(); ++i) {
-        const QPointF &point = creationPoints[i];
-        painter.drawEllipse(point, 4.5 / m_viewScale, 4.5 / m_viewScale);
-        if (i > 0)
-            painter.drawLine(creationPoints[i - 1], point);
+    painter.setBrush(Qt::NoBrush);
+    for (int i = 1; i < creationPoints.size(); ++i)
+        painter.drawLine(creationPoints[i - 1], creationPoints[i]);
+    // 橡皮筋预览：把光标与「下一个角点将要连到的那些角点」连起来。
+    // 已点 1 个：连第 1 个；已点 2 个：连第 2 个；已点 3 个：连第 3 个，
+    // 同时闭合回第 1 个——第四点落下后正好是四边形的两条收口边。
+    const int last = creationPoints.size() - 1;
+    const bool showCursor = last >= 0 && last <= 2 && !cursorPoint.isNull();
+    if (showCursor) {
+        painter.drawLine(creationPoints[last], cursorPoint);
+        if (last == 2)
+            painter.drawLine(cursorPoint, creationPoints[0]);
     }
+    // 角点标记与平面控制点保持一致：白色方块 + 深色描边。
+    // 光标处的待放置角点也用同一种方块，预览边两端看起来完全对称。
+    painter.setPen(QPen(QColor("#0e526e"), 1.0 / m_viewScale));
+    painter.setBrush(QColor("#f3f8fa"));
+    const qreal handle = HandleHalfSize / m_viewScale;
+    for (const QPointF &point : creationPoints)
+        painter.drawRect(QRectF(point.x() - handle, point.y() - handle, handle * 2, handle * 2));
+    if (showCursor)
+        painter.drawRect(QRectF(cursorPoint.x() - handle, cursorPoint.y() - handle,
+                                handle * 2, handle * 2));
     painter.restore();
 
     // 在屏幕坐标中描边，透视和缩放只改变轮廓，不改变线宽、虚线长度和速度。
@@ -189,9 +211,9 @@ void SceneRenderer::drawPlaneGuides(QPainter &painter, const Facet &facet, bool 
                            (sharedEdges & quint8(1u << ((i + 3) % 4))))) ||
                 (i >= 4 && (sharedEdges & quint8(1u << (i - 4)))))
                 continue;
-            const qreal radius = (i < 4 ? 5.5 : 4.5) / m_viewScale;
+            const qreal radius = HandleHalfSize / m_viewScale;
             painter.setPen(QPen(QColor("#0e526e"), 1.0 / m_viewScale));
-            painter.setBrush(i < 4 ? QColor("#f3f8fa") : QColor("#4bc3ff"));
+            painter.setBrush(QColor("#f3f8fa"));
             painter.drawRect(QRectF(hs[i].x() - radius, hs[i].y() - radius,
                                     radius * 2, radius * 2));
         }
