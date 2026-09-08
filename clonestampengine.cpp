@@ -62,7 +62,23 @@ QRect CloneStampEngine::drawStrokeTo(QImage &layer, const QPointF &position)
     return dirty;
 }
 
-QRect CloneStampEngine::applyDab(QImage &layer, const QPointF &position)
+void CloneStampEngine::setPreview(const QImage &source, const QTransform &targetToCanvas,
+                                   const QTransform &sourceToCanvas, const QPointF &offset,
+                                   const QPointF &position)
+{
+    bool invertible = false;
+    m_canvasToTarget = targetToCanvas.inverted(&invertible);
+    m_source = invertible ? source.convertToFormat(QImage::Format_ARGB32_Premultiplied) : QImage();
+    m_targetToCanvas = targetToCanvas;
+    m_sourceToCanvas = sourceToCanvas;
+    m_offset = offset;
+    m_targetReference = position;
+    m_canvasReference = targetToCanvas.map(position);
+    m_sourceReference = position + offset;
+    // 预览不写 m_lastPosition，也不进入落笔状态。
+}
+
+QRect CloneStampEngine::dabRect(const QPointF &position) const
 {
     if (m_source.isNull() || m_opacity <= 0)
         return {};
@@ -72,13 +88,15 @@ QRect CloneStampEngine::applyDab(QImage &layer, const QPointF &position)
     for (const QPointF &corner : {bounds.topLeft(), bounds.topRight(), bounds.bottomLeft(), bounds.bottomRight()})
         if (!ProjectiveMapping::mapVisible(m_targetToCanvas, corner, m_targetReference, &mapped))
             return {};
-    // 先在浮点坐标中裁剪，避免接近消失线时整型溢出或分配巨大图像。
-    const QRect area = m_targetToCanvas.mapRect(bounds).intersected(QRectF(layer.rect()))
-                           .toAlignedRect().intersected(layer.rect());
-    if (area.isEmpty())
-        return {};
-    QImage dab(area.size(), QImage::Format_ARGB32_Premultiplied);
-    dab.fill(Qt::transparent);
+    // 裁到源图（=画布）范围，避免采样到源图外的空区域。
+    return m_targetToCanvas.mapRect(bounds).intersected(QRectF(m_source.rect())).toAlignedRect();
+}
+
+bool CloneStampEngine::renderDab(QImage &dab, const QRect &area, const QPointF &position) const
+{
+    if (m_source.isNull() || m_opacity <= 0 || dab.isNull() || area.isEmpty())
+        return false;
+    const qreal radius = m_diameter / 2;
     bool changed = false;
     for (int y = 0; y < area.height(); ++y) {
         auto *row = reinterpret_cast<QRgb *>(dab.scanLine(y));
@@ -96,7 +114,27 @@ QRect CloneStampEngine::applyDab(QImage &layer, const QPointF &position)
             changed |= qAlpha(row[x]) > 0;
         }
     }
-    if (!changed)
+    return changed;
+}
+
+QRect CloneStampEngine::applyDab(QImage &layer, const QPointF &position)
+{
+    if (m_source.isNull() || m_opacity <= 0)
+        return {};
+    const qreal radius = m_diameter / 2;
+    const QRectF bounds(position.x() - radius, position.y() - radius, m_diameter, m_diameter);
+    QPointF mapped;
+    for (const QPointF &corner : {bounds.topLeft(), bounds.topRight(), bounds.bottomLeft(), bounds.bottomRight()})
+        if (!ProjectiveMapping::mapVisible(m_targetToCanvas, corner, m_targetReference, &mapped))
+            return {};
+    // 先在浮点坐标中裁剪，避免接近消失线时整型溢出或分配巨大图像。
+    const QRect area = m_targetToCanvas.mapRect(bounds).intersected(QRectF(layer.rect()))
+                           .toAlignedRect().intersected(layer.rect());
+    if (area.isEmpty())
+        return {};
+    QImage dab(area.size(), QImage::Format_ARGB32_Premultiplied);
+    dab.fill(Qt::transparent);
+    if (!renderDab(dab, area, position))
         return {};
     QPainter painter(&layer);
     painter.drawImage(area.topLeft(), dab);

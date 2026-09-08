@@ -570,7 +570,19 @@ void PerspectiveCanvas::cancelInteraction()
     m_hoverPlane = -1;
     m_stateChanged = false;
     clearSelection();
+    m_clonePreviewSource = QImage();
+    m_clonePreviewSourcePaintKey = 0;
     update();
+}
+
+// 渲染当前文档的合成（背景 + 绘画层 + 浮动图像），画到与画布同尺寸的 QImage。
+QImage PerspectiveCanvas::renderDocumentComposite() const
+{
+    QImage image(m_doc.background().size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    SceneRenderer(m_doc).render(painter, 1.0, false);
+    return image;
 }
 
 // 切换当前工具，并清理进行中的交互状态、更新光标与提示
@@ -657,6 +669,22 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
             const QPointF uv = planeToUv(plane, m_cursorPoint, &ok);
             if (ok)
                 m_paint.applyDab(painter, plane, uv);
+        }
+    }
+    // 图章预览（WYSIWYG）：复用图章引擎的逐像素采样，把光标处即将落下的
+    // 笔触点画到画布上，与真实落笔完全一致。源点十字标记在下方另外绘制。
+    if (m_tool == CloneStampTool && m_gesture != Gesture::Clone && m_doc.hasLoadedImage()
+        && m_cloneTool.hasSource()) {
+        if (planeAt(m_doc.planes(), m_cursorPoint) >= 0) {
+            // 源图（文档合成）：绘画层 cacheKey 变化时才重渲染；悬停期间
+            // 源不变，避免每帧全画布合成。
+            const qint64 paintKey = m_doc.paintLayer().cacheKey();
+            if (m_clonePreviewSource.isNull() || paintKey != m_clonePreviewSourcePaintKey) {
+                m_clonePreviewSource = renderDocumentComposite();
+                m_clonePreviewSourcePaintKey = paintKey;
+            }
+            if (!m_clonePreviewSource.isNull())
+                m_cloneTool.renderPreview(painter, m_clonePreviewSource, m_doc.planes(), m_cursorPoint);
         }
     }
     if (m_tool == MarqueeTool && !m_selectionRect.isEmpty()) {

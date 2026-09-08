@@ -1,5 +1,7 @@
 #include "clonetool.h"
 
+#include <QPainter>
+
 QPointF CloneTool::originalMarker() const
 {
     QPointF marker = m_source;
@@ -98,4 +100,31 @@ void CloneTool::cancel()
     if (!m_aligned)
         m_hasOffset = false;
     m_marker = originalMarker();
+}
+
+void CloneTool::renderPreview(QPainter &painter, const QImage &source,
+                              const QVector<Plane> &planes, const QPointF &point)
+{
+    if (!m_hasSource)
+        return;
+    const int index = PlaneMath::planeAt(planes, point);
+    if (index < 0)
+        return;
+    const ProjectiveMapping targetMapping = PlaneMath::surfaceMapping(planes[index]);
+    QPointF position;
+    if (!targetMapping.fromCanvas(point, &position))
+        return;
+    // 与 begin() 保持一致的偏移计算：首笔（或非对齐模式）用当前落点重新锚定，
+    // 对齐模式下已锁定偏移则沿用，从而保证预览与真实落笔的取样位置完全一致。
+    const QPointF offset = (!m_aligned || !m_hasOffset) ? (m_source - position) : m_offset;
+    m_engine.setPreview(source, targetMapping.forward(),
+                        m_sourceOnPlane ? m_sourceMapping.forward() : QTransform(),
+                        offset, position);
+    const QRect area = m_engine.dabRect(position);
+    if (area.isEmpty())
+        return;
+    QImage dab(area.size(), QImage::Format_ARGB32_Premultiplied);
+    dab.fill(Qt::transparent);
+    m_engine.renderDab(dab, area, position);
+    painter.drawImage(area.topLeft(), dab);
 }

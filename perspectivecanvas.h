@@ -93,6 +93,8 @@ private:
     void finishPlaneCreation();
     void beginClone(const QPointF &point, bool pickSource);
     void updateCloneMarker(const QPointF &point);
+    // 渲染当前文档的合成（背景 + 绘画层 + 浮动图像）到画布同尺寸的 QImage。
+    QImage renderDocumentComposite() const;
     int imageTransformHandleAt(const QPointF &point) const;
     int imageRotationCornerAt(const QPointF &point) const;
     bool pointToSelectionSurface(const QPointF &point, QPointF *surface) const;
@@ -138,4 +140,6 @@ private:
     SelectionAction m_selectionAction = SelectionAction::None;
     QImage m_selectionSampleSource;
     QImage m_selectionPaintBefore;
+    QImage m_clonePreviewSource;             // 图章预览的源（文档合成）缓存
+    qint64 m_clonePreviewSourcePaintKey = 0; // 缓存对应的绘画层 cacheKey
 };

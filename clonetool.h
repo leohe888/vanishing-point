@@ -3,6 +3,8 @@
 #include "clonestampengine.h"
 #include "planemath.h"
 
+class QPainter;
+
 class CloneTool
 {
 public:
@@ -19,6 +21,11 @@ public:
     void hover(const QVector<Plane> &planes, const QPointF &point);
     void end(const QVector<Plane> &planes, const QPointF &point);
     void cancel();
+
+    // 在光标处预览即将仿制的内容（所见即所得）：复用引擎的逐像素采样，
+    // 与真实落笔完全一致，但不修改任何交互状态（源点/偏移/是否落笔）。
+    void renderPreview(QPainter &painter, const QImage &source,
+                       const QVector<Plane> &planes, const QPointF &point);
 
 private:
     CloneStampEngine m_engine;
