@@ -319,44 +319,71 @@ void PerspectiveCanvas::fillSelectionFromPoint(const QPointF &point)
     // started. This prevents repeated mouse moves from sampling or stacking
     // earlier previews.
     m_doc.paintLayer() = m_selectionPaintBefore;
-    for (int y = dirty.top(); y <= dirty.bottom(); ++y) {
-        for (int x = dirty.left(); x <= dirty.right(); ++x) {
-            const QPointF canvasPoint(x + 0.5, y + 0.5);
-            if (!targetPath.contains(canvasPoint))
-                continue;
+    QPainter painter(&m_doc.paintLayer());
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
 
-            QPointF targetSurface;
-            bool mapped = false;
-            for (const Facet &face : m_selectionFaces) {
-                if (!planePolygon(face.corner).containsPoint(canvasPoint, Qt::OddEvenFill))
-                    continue;
-                bool ok = false;
-                targetSurface = planeToSurface(face, canvasPoint, &ok);
-                if (ok) {
-                    mapped = true;
+    QPainterPath selectionSurfacePath;
+    selectionSurfacePath.addRect(m_selectionRect.normalized());
+    // Each target/source face pair is one homographic patch. Qt rasterizes the
+    // whole patch at once, replacing the old per-pixel inverse mapping loop.
+    for (const Facet &targetFace : m_selectionFaces) {
+        QPainterPath targetSurfacePath;
+        targetSurfacePath.addPolygon(planePolygon(targetFace.surfaceCorner));
+        targetSurfacePath.closeSubpath();
+        const ProjectiveMapping targetMapping = surfaceMapping(targetFace);
+        if (!targetMapping.isValid())
+            continue;
+        for (const Facet &sourceFace : m_selectionFaces) {
+            QPolygonF shiftedSourceSurface;
+            QPolygonF sourceCanvas;
+            QPolygonF targetCanvas;
+            for (int c = 0; c < 4; ++c) {
+                shiftedSourceSurface.append(sourceFace.surfaceCorner[c] - sourceOffset);
+                sourceCanvas.append(sourceFace.corner[c]);
+                QPointF mapped;
+                if (!targetMapping.toCanvas(shiftedSourceSurface.last(), &mapped)) {
+                    targetCanvas.clear();
                     break;
                 }
+                targetCanvas.append(mapped);
             }
-            if (!mapped)
+            if (targetCanvas.size() != 4)
                 continue;
 
-            const QPointF sourceSurface = targetSurface + sourceOffset;
-            QPointF sourceCanvas;
-            bool sourceMapped = false;
-            for (const Facet &face : m_selectionFaces) {
-                if (!planePolygon(face.surfaceCorner).containsPoint(sourceSurface, Qt::OddEvenFill))
-                    continue;
-                if (surfaceMapping(face).toCanvas(sourceSurface, &sourceCanvas)) {
-                    sourceMapped = true;
-                    break;
+            QPainterPath sourceDomain;
+            sourceDomain.addPolygon(shiftedSourceSurface);
+            sourceDomain.closeSubpath();
+            const QPainterPath surfacePatch = selectionSurfacePath
+                                                  .intersected(targetSurfacePath)
+                                                  .intersected(sourceDomain);
+            if (surfacePatch.isEmpty())
+                continue;
+
+            QPainterPath canvasClip;
+            for (const QPolygonF &polygon : surfacePatch.toFillPolygons()) {
+                QPolygonF mappedPolygon;
+                for (const QPointF &surfacePoint : polygon) {
+                    QPointF mapped;
+                    if (targetMapping.toCanvas(surfacePoint, &mapped))
+                        mappedPolygon.append(mapped);
+                }
+                if (mappedPolygon.size() >= 3) {
+                    canvasClip.addPolygon(mappedPolygon);
+                    canvasClip.closeSubpath();
                 }
             }
-            const QPoint sample = sourceCanvas.toPoint();
-            if (sourceMapped && m_selectionSampleSource.rect().contains(sample))
-                m_doc.paintLayer().setPixelColor(x, y,
-                                                  m_selectionSampleSource.pixelColor(sample));
+            const ProjectiveMapping sourceToTarget(sourceCanvas, targetCanvas);
+            if (!sourceToTarget.isValid() || canvasClip.isEmpty())
+                continue;
+            painter.save();
+            painter.setClipPath(canvasClip, Qt::IntersectClip);
+            painter.setWorldTransform(sourceToTarget.forward());
+            painter.drawImage(QPointF(), m_selectionSampleSource);
+            painter.restore();
         }
     }
+    painter.end();
     m_doc.addPaintDirty(dirty);
     m_stateChanged |= !dirty.isEmpty();
 }
