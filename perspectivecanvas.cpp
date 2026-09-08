@@ -57,7 +57,7 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
     auto *antsTimer = new QTimer(this);
     antsTimer->setInterval(80);
     connect(antsTimer, &QTimer::timeout, this, [this] {
-        if (isVisible() && m_doc.selectedImage() >= 0 && m_doc.selectedImage() < m_doc.images().size()) {
+        if (isVisible() && (hasSelectedImage() || !m_selectionRect.isEmpty())) {
             m_antsPhase = int(m_antsPhase + 1) % 8;
             update();
         }
@@ -97,6 +97,7 @@ bool PerspectiveCanvas::loadImage(const QString &fileName)
     cancelInteraction();
     m_cloneTool.resetSource();
     m_creationPoints.clear();
+    clearSelection();
     updateViewTransform();
     update();
     emit statusMessage(tr("图像已打开。请依次点击四个点创建透视平面。"), 5000);
@@ -206,6 +207,206 @@ void PerspectiveCanvas::dropFloatingImage(const QImage &image, const QString &st
     emit statusMessage(statusText, 3000);
 }
 
+void PerspectiveCanvas::clearSelection()
+{
+    m_selectionFaces.clear();
+    m_selectionRect = QRectF();
+    m_selectionStartRect = QRectF();
+    m_selectionGroup = -1;
+    m_selectionAction = SelectionAction::None;
+    m_selectionSampleSource = QImage();
+    m_selectionPaintBefore = QImage();
+}
+
+bool PerspectiveCanvas::pointToSelectionSurface(const QPointF &point, QPointF *surface) const
+{
+    if (!surface || m_selectionFaces.isEmpty())
+        return false;
+    for (int i = m_selectionFaces.size() - 1; i >= 0; --i) {
+        const Facet &face = m_selectionFaces[i];
+        if (!planePolygon(face.corner).containsPoint(point, Qt::OddEvenFill))
+            continue;
+        bool ok = false;
+        *surface = planeToSurface(face, point, &ok);
+        if (ok)
+            return true;
+    }
+    bool ok = false;
+    *surface = planeToSurface(m_selectionFaces.first(), point, &ok);
+    return ok;
+}
+
+QPainterPath PerspectiveCanvas::selectionPath() const
+{
+    QPainterPath result;
+    if (m_selectionRect.isEmpty())
+        return result;
+    QPainterPath rectangle;
+    rectangle.addRect(m_selectionRect.normalized());
+    for (const Facet &face : m_selectionFaces) {
+        QPainterPath facePath;
+        facePath.addPolygon(planePolygon(face.surfaceCorner));
+        facePath.closeSubpath();
+        const QPainterPath clipped = rectangle.intersected(facePath);
+        const ProjectiveMapping mapping = surfaceMapping(face);
+        if (!mapping.isValid())
+            continue;
+        for (const QPolygonF &surfacePolygon : clipped.toFillPolygons()) {
+            QPolygonF canvasPolygon;
+            for (const QPointF &surfacePoint : surfacePolygon) {
+                QPointF canvasPoint;
+                if (mapping.toCanvas(surfacePoint, &canvasPoint))
+                    canvasPolygon.append(canvasPoint);
+            }
+            if (canvasPolygon.size() >= 3) {
+                QPainterPath patch;
+                patch.addPolygon(canvasPolygon);
+                patch.closeSubpath();
+                result = result.united(patch);
+            }
+        }
+    }
+    return result;
+}
+
+void PerspectiveCanvas::updateSelection(const QPointF &point, Qt::KeyboardModifiers modifiers)
+{
+    QPointF surface;
+    if (!pointToSelectionSurface(point, &surface))
+        return;
+    if (m_selectionAction == SelectionAction::Create) {
+        QPointF delta = surface - m_selectionPressSurface;
+        if (modifiers & Qt::ShiftModifier) {
+            const qreal side = qMax(qAbs(delta.x()), qAbs(delta.y()));
+            delta.setX(delta.x() < 0 ? -side : side);
+            delta.setY(delta.y() < 0 ? -side : side);
+        }
+        m_selectionRect = QRectF(m_selectionPressSurface,
+                                 m_selectionPressSurface + delta).normalized();
+    } else if (m_selectionAction == SelectionAction::Move) {
+        QPointF delta = surface - m_selectionPressSurface;
+        if (modifiers & Qt::ShiftModifier) {
+            if (qAbs(delta.x()) >= qAbs(delta.y()))
+                delta.setY(0);
+            else
+                delta.setX(0);
+            delta.setX(qRound(delta.x() / m_gridSize) * m_gridSize);
+            delta.setY(qRound(delta.y() / m_gridSize) * m_gridSize);
+        }
+        m_selectionRect = m_selectionStartRect.translated(delta);
+    } else if (m_selectionAction == SelectionAction::Fill) {
+        fillSelectionFromPoint(point);
+    }
+    update();
+}
+
+void PerspectiveCanvas::fillSelectionFromPoint(const QPointF &point)
+{
+    if (m_selectionSampleSource.isNull() || m_selectionPaintBefore.isNull())
+        return;
+
+    QPointF sourceAnchor;
+    if (!pointToSelectionSurface(point, &sourceAnchor))
+        return;
+    const QPointF sourceOffset = sourceAnchor - m_selectionPressSurface;
+    const QPainterPath targetPath = selectionPath();
+    const QRect dirty = targetPath.boundingRect().toAlignedRect().adjusted(-1, -1, 1, 1)
+                            .intersected(m_doc.paintLayer().rect());
+    if (dirty.isEmpty())
+        return;
+
+    // Rebuild the preview from the paint layer as it was when Ctrl-drag
+    // started. This prevents repeated mouse moves from sampling or stacking
+    // earlier previews.
+    m_doc.paintLayer() = m_selectionPaintBefore;
+    for (int y = dirty.top(); y <= dirty.bottom(); ++y) {
+        for (int x = dirty.left(); x <= dirty.right(); ++x) {
+            const QPointF canvasPoint(x + 0.5, y + 0.5);
+            if (!targetPath.contains(canvasPoint))
+                continue;
+
+            QPointF targetSurface;
+            bool mapped = false;
+            for (const Facet &face : m_selectionFaces) {
+                if (!planePolygon(face.corner).containsPoint(canvasPoint, Qt::OddEvenFill))
+                    continue;
+                bool ok = false;
+                targetSurface = planeToSurface(face, canvasPoint, &ok);
+                if (ok) {
+                    mapped = true;
+                    break;
+                }
+            }
+            if (!mapped)
+                continue;
+
+            const QPointF sourceSurface = targetSurface + sourceOffset;
+            QPointF sourceCanvas;
+            bool sourceMapped = false;
+            for (const Facet &face : m_selectionFaces) {
+                if (!planePolygon(face.surfaceCorner).containsPoint(sourceSurface, Qt::OddEvenFill))
+                    continue;
+                if (surfaceMapping(face).toCanvas(sourceSurface, &sourceCanvas)) {
+                    sourceMapped = true;
+                    break;
+                }
+            }
+            const QPoint sample = sourceCanvas.toPoint();
+            if (sourceMapped && m_selectionSampleSource.rect().contains(sample))
+                m_doc.paintLayer().setPixelColor(x, y,
+                                                  m_selectionSampleSource.pixelColor(sample));
+        }
+    }
+    m_doc.addPaintDirty(dirty);
+    m_stateChanged |= !dirty.isEmpty();
+}
+
+int PerspectiveCanvas::copySelectionToFloatingImage(const QPointF &point)
+{
+    const QRectF rect = m_selectionRect.normalized();
+    if (rect.width() < 1 || rect.height() < 1 || m_selectionFaces.isEmpty())
+        return -1;
+    const QSize size(qMin(8192, qMax(1, qCeil(rect.width()))),
+                     qMin(8192, qMax(1, qCeil(rect.height()))));
+    QImage source(m_doc.background().size(), QImage::Format_ARGB32_Premultiplied);
+    source.fill(Qt::transparent);
+    {
+        QPainter sourcePainter(&source);
+        SceneRenderer(m_doc).render(sourcePainter, 1.0, false);
+    }
+    QImage extracted(size, QImage::Format_ARGB32_Premultiplied);
+    extracted.fill(Qt::transparent);
+    QPainter painter(&extracted);
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    int hostFace = 0;
+    QPointF pressSurface;
+    pointToSelectionSurface(point, &pressSurface);
+    for (int i = 0; i < m_selectionFaces.size(); ++i) {
+        const Facet &face = m_selectionFaces[i];
+        QPolygonF target;
+        for (int c = 0; c < 4; ++c)
+            target.append(face.surfaceCorner[c] - rect.topLeft());
+        QPainterPath clip;
+        clip.addPolygon(target);
+        clip.closeSubpath();
+        QPainterPath outputBounds;
+        outputBounds.addRect(QRectF(QPointF(), QSizeF(size)));
+        clip = outputBounds.intersected(clip);
+        const ProjectiveMapping mapping(planePolygon(face.corner), target);
+        if (!mapping.isValid() || clip.isEmpty())
+            continue;
+        painter.save();
+        painter.setClipPath(clip);
+        painter.setWorldTransform(mapping.forward());
+        painter.drawImage(QPointF(), source);
+        painter.restore();
+        if (planePolygon(face.surfaceCorner).containsPoint(pressSurface, Qt::OddEvenFill))
+            hostFace = i;
+    }
+    painter.end();
+    return m_doc.addFloatingImageOnSurface(extracted, m_selectionFaces, hostFace, rect.topLeft());
+}
+
 // 将当前浮动图像顺时针旋转 90°
 
 
@@ -251,6 +452,7 @@ void PerspectiveCanvas::cancelInteraction()
     m_hasExtrudePreview = false;
     m_hoverPlane = -1;
     m_stateChanged = false;
+    clearSelection();
     update();
 }
 
@@ -260,6 +462,8 @@ void PerspectiveCanvas::setTool(Tool tool)
     if (tool == TransformTool && !hasSelectedImage())
         return;
     commitInteraction();
+    if (tool != MarqueeTool)
+        clearSelection();
     m_tool = tool;
     m_creationPoints.clear();
     m_gesture = Gesture::Idle;
@@ -271,7 +475,8 @@ void PerspectiveCanvas::setTool(Tool tool)
         tr("拖动平面内部沿原无限透视平面移动；拖动控制点调整；Ctrl 从边缘拖出垂直平面"),
         tr("在平面内拖动进行透视绘画，笔触可延伸到平面之外"),
         tr("Alt+左键设置源点；在透视平面内拖动仿制。对齐时源点持续跟随光标"),
-        tr("拖动控制点缩放，角点外侧拖动旋转；Shift 等比缩放/15°旋转，Alt 中心缩放；Esc 取消")
+        tr("拖动控制点缩放，角点外侧拖动旋转；Shift 等比缩放/15°旋转，Alt 中心缩放；Esc 取消"),
+        tr("拖动创建透视选区；Shift 正方形；Alt 拖动复制内容；Ctrl 拖动取色填充")
     };
     emit statusMessage(messages[tool]);
     update();
@@ -323,6 +528,23 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
     renderer.render(painter, m_scale, true, m_creationPoints,
                     m_hasExtrudePreview ? &m_extrudePreview : nullptr,
                     m_tool == EditPlane, m_hoverPlane, m_antsPhase, false, m_gridSize);
+    if (m_tool == MarqueeTool && !m_selectionRect.isEmpty()) {
+        painter.save();
+        painter.resetTransform();
+        const QPainterPath outline = QTransform::fromTranslate(m_offset.x(), m_offset.y())
+                                         .map(QTransform::fromScale(m_scale, m_scale)
+                                                  .map(selectionPath()));
+        QPen pen(Qt::white, 1);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(pen);
+        painter.drawPath(outline);
+        pen.setColor(Qt::black);
+        pen.setDashPattern({4, 4});
+        pen.setDashOffset(m_antsPhase);
+        painter.setPen(pen);
+        painter.drawPath(outline);
+        painter.restore();
+    }
     if (m_tool == TransformTool && hasSelectedImage()) {
         const FloatingImage &image = m_doc.image(m_doc.selectedImage());
         painter.save();
@@ -560,6 +782,77 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
         return;
     }
 
+    if (m_tool == MarqueeTool) {
+        QPointF surface;
+        const bool insideSelection = !m_selectionRect.isEmpty()
+                                     && selectionPath().contains(point)
+                                     && pointToSelectionSurface(point, &surface);
+        if (insideSelection && (event->modifiers() & Qt::AltModifier)) {
+            const int imageIndex = copySelectionToFloatingImage(point);
+            if (imageIndex >= 0) {
+                m_draggingImage = imageIndex;
+                m_gesture = Gesture::Image;
+                m_imageTool.beginMove(m_doc.image(imageIndex), surface - m_selectionRect.topLeft());
+                m_doc.beginEdit();
+                clearSelection();
+                setCursor(Qt::ClosedHandCursor);
+                emit statusMessage(tr("已复制选区内容为浮动图像"), 2500);
+            }
+            update();
+            return;
+        }
+        if (insideSelection) {
+            m_selectionPressSurface = surface;
+            m_selectionStartRect = m_selectionRect;
+            m_selectionAction = (event->modifiers() & Qt::ControlModifier)
+                                    ? SelectionAction::Fill : SelectionAction::Move;
+            m_gesture = Gesture::Selection;
+            if (m_selectionAction == SelectionAction::Fill) {
+                m_selectionSampleSource = QImage(m_doc.background().size(), QImage::Format_ARGB32_Premultiplied);
+                m_selectionSampleSource.fill(Qt::transparent);
+                QPainter sourcePainter(&m_selectionSampleSource);
+                SceneRenderer(m_doc).render(sourcePainter, 1.0, false);
+                sourcePainter.end();
+                m_doc.beginEdit();
+                m_doc.beginPaintTransaction();
+                m_selectionPaintBefore = m_doc.paintLayer();
+                fillSelectionFromPoint(point);
+            }
+            update();
+            return;
+        }
+        const int planeIndex = planeAt(m_doc.planes(), point);
+        if (planeIndex < 0) {
+            clearSelection();
+            update();
+            return;
+        }
+        const Plane &host = m_doc.planes()[planeIndex];
+        m_selectionFaces.clear();
+        for (const Plane &plane : m_doc.planes()) {
+            if (plane.surfaceGroup != host.surfaceGroup)
+                continue;
+            Facet face;
+            for (int c = 0; c < 4; ++c) {
+                face.corner[c] = plane.corner[c];
+                face.surfaceCorner[c] = plane.surfaceCorner[c];
+            }
+            m_selectionFaces.append(face);
+        }
+        bool ok = false;
+        m_selectionPressSurface = planeToSurface(host, point, &ok);
+        if (!ok) {
+            clearSelection();
+            return;
+        }
+        m_selectionGroup = host.surfaceGroup;
+        m_selectionRect = QRectF(m_selectionPressSurface, QSizeF());
+        m_selectionAction = SelectionAction::Create;
+        m_gesture = Gesture::Selection;
+        update();
+        return;
+    }
+
     if (hitImage) {
         m_draggingImage = grabbedImage;
         m_gesture = Gesture::Image;
@@ -714,6 +1007,11 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
 void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
+    if (m_tool == MarqueeTool && m_gesture == Gesture::Selection &&
+        (event->buttons() & Qt::LeftButton)) {
+        updateSelection(point, event->modifiers());
+        return;
+    }
     if (m_imageTool.transforming() && m_draggingImage >= 0 && (event->buttons() & Qt::LeftButton)) {
         updateImageTransform(point, event->modifiers());
         return;
@@ -858,6 +1156,20 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton)
         return;
+    if (m_tool == MarqueeTool && m_gesture == Gesture::Selection) {
+        updateSelection(toImage(event->position()), event->modifiers());
+        if (m_selectionAction == SelectionAction::Fill)
+            m_doc.commitEdit(m_stateChanged);
+        if (m_selectionRect.width() < 1 || m_selectionRect.height() < 1)
+            clearSelection();
+        m_selectionAction = SelectionAction::None;
+        m_selectionSampleSource = QImage();
+        m_selectionPaintBefore = QImage();
+        m_gesture = Gesture::Idle;
+        m_stateChanged = false;
+        update();
+        return;
+    }
     if (m_gesture == Gesture::Plane && m_doc.selectedPlane() >= 0) {
         Plane candidate;
         const bool valid = m_planeTool.update(toImage(event->position()), &candidate);

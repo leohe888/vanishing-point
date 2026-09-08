@@ -67,7 +67,8 @@ void MainWindow::buildUi()
     m_tools = new QButtonGroup(this);
     m_tools->setExclusive(true);
     const QStringList toolNames{tr("创建平面  (C)"), tr("编辑平面  (V)"),
-                                tr("画笔工具  (B)"), tr("图章工具  (S)"), tr("变换工具  (T)")};
+                                tr("画笔工具  (B)"), tr("图章工具  (S)"), tr("变换工具  (T)"),
+                                tr("选框工具  (M)")};
     for (int i = 0; i < toolNames.size(); ++i) {
         auto *button = new QToolButton(side);
         button->setText(toolNames[i]);
@@ -184,7 +185,8 @@ void MainWindow::buildUi()
                     button->click();
             });
     const QList<QKeySequence> shortcuts{QKeySequence("C"), QKeySequence("V"),
-                                        QKeySequence("B"), QKeySequence("S"), QKeySequence("T")};
+                                        QKeySequence("B"), QKeySequence("S"), QKeySequence("T"),
+                                        QKeySequence("M")};
     for (int i = 0; i < shortcuts.size(); ++i) {
         auto *shortcut = new QShortcut(shortcuts[i], this);
         connect(shortcut, &QShortcut::activated, m_tools->button(i), &QAbstractButton::click);

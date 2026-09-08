@@ -66,6 +66,8 @@ public:
     int selectedImage() const { return m_selectedImage; }
     void setSelectedImage(int index);
     int addFloatingImage(const QImage &image);     // 追加到左上角，返回索引
+    int addFloatingImageOnSurface(const QImage &image, const QVector<Facet> &faces,
+                                  int hostFace, const QPointF &surfacePosition);
     void removeFloatingImage(int index);          // 删除指定浮动图像
     void setImagePosition(int index, const QPointF &position); // 仅移动位置
     // 把图像吸附到一组几何快照上（surfacePosition 为展开曲面坐标）

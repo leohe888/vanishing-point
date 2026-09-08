@@ -173,6 +173,25 @@ int CanvasDocument::addFloatingImage(const QImage &image)
     return m_selectedImage;
 }
 
+int CanvasDocument::addFloatingImageOnSurface(const QImage &image,
+                                               const QVector<Facet> &faces,
+                                               int hostFace,
+                                               const QPointF &surfacePosition)
+{
+    if (image.isNull() || faces.isEmpty() || hostFace < 0 || hostFace >= faces.size())
+        return -1;
+    FloatingImage floating;
+    floating.image = image.convertToFormat(QImage::Format_ARGB32);
+    floating.position = surfacePosition;
+    floating.attached = true;
+    floating.faces = faces;
+    floating.hostFace = hostFace;
+    m_images.append(floating);
+    setSelectedImage(m_images.size() - 1);
+    commitHistory();
+    return m_selectedImage;
+}
+
 void CanvasDocument::lockPlaneEdge(int index, int edge)
 {
     if (index >= 0 && index < m_planes.size() && edge >= 0 && edge < 4)

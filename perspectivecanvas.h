@@ -10,6 +10,8 @@
 
 #include <QColor>
 #include <QPointF>
+#include <QPainterPath>
+#include <QRectF>
 #include <QVector>
 #include <QWidget>
 
@@ -22,7 +24,7 @@ class PerspectiveCanvas : public QWidget
 {
     Q_OBJECT
 public:
-    enum Tool { CreatePlane, EditPlane, BrushTool, CloneStampTool, TransformTool };
+    enum Tool { CreatePlane, EditPlane, BrushTool, CloneStampTool, TransformTool, MarqueeTool };
     Q_ENUM(Tool)
 
     explicit PerspectiveCanvas(QWidget *parent = nullptr);
@@ -91,8 +93,15 @@ private:
     void updateCloneMarker(const QPointF &point);
     int imageTransformHandleAt(const QPointF &point) const;
     int imageRotationCornerAt(const QPointF &point) const;
+    bool pointToSelectionSurface(const QPointF &point, QPointF *surface) const;
+    QPainterPath selectionPath() const;
+    void updateSelection(const QPointF &point, Qt::KeyboardModifiers modifiers);
+    int copySelectionToFloatingImage(const QPointF &point);
+    void fillSelectionFromPoint(const QPointF &point);
+    void clearSelection();
 
-    enum class Gesture { Idle, Plane, Image, Brush, Clone };
+    enum class Gesture { Idle, Plane, Image, Brush, Clone, Selection };
+    enum class SelectionAction { None, Create, Move, Fill };
     Gesture m_gesture = Gesture::Idle;
     bool drawing() const { return m_gesture == Gesture::Brush || m_gesture == Gesture::Clone; }
     ImageTransformTool m_imageTool;
@@ -115,4 +124,12 @@ private:
     qreal m_gridSize = 50.0;                  // 平面展开坐标中的网格边长
     QPointF m_offset;                         // 视图居中偏移
     bool m_stateChanged = false;              // 自上次提交以来状态是否已变化
+    QVector<Facet> m_selectionFaces;          // 选区所在共享曲面的当前几何快照
+    QRectF m_selectionRect;                   // 展开曲面坐标中的矩形选区
+    QRectF m_selectionStartRect;
+    QPointF m_selectionPressSurface;
+    int m_selectionGroup = -1;
+    SelectionAction m_selectionAction = SelectionAction::None;
+    QImage m_selectionSampleSource;
+    QImage m_selectionPaintBefore;
 };
