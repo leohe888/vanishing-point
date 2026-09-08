@@ -646,6 +646,19 @@ void PerspectiveCanvas::paintEvent(QPaintEvent *)
                     m_hasExtrudePreview ? &m_extrudePreview : nullptr,
                     m_tool == EditPlane, m_hoverPlane, m_antsPhase, false, m_gridSize,
                     m_tool == CreatePlane ? m_cursorPoint : QPointF());
+    // 画笔预览：光标在某个透视平面上时，按当前画笔参数（直径/硬度/不透明度/颜色）
+    // 画一个即将落下的笔触点，跟随光标移动。实际绘制时（m_gesture == Brush）这里不画，
+    // 否则会和已画到绘画层的笔迹重叠。
+    if (m_tool == BrushTool && m_gesture != Gesture::Brush && m_doc.hasLoadedImage()) {
+        const int planeIndex = planeAt(m_doc.planes(), m_cursorPoint);
+        if (planeIndex >= 0) {
+            const Plane &plane = m_doc.planes()[planeIndex];
+            bool ok = false;
+            const QPointF uv = planeToUv(plane, m_cursorPoint, &ok);
+            if (ok)
+                m_paint.applyDab(painter, plane, uv);
+        }
+    }
     if (m_tool == MarqueeTool && !m_selectionRect.isEmpty()) {
         painter.save();
         painter.resetTransform();
@@ -1142,8 +1155,9 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     const QPointF point = toImage(event->position());
     m_cursorPoint = point;
-    // 创建平面时橡皮筋要跟着光标走，因此每次移动都要重绘。
-    if (m_tool == CreatePlane && !m_creationPoints.isEmpty())
+    // 创建平面的橡皮筋与画笔的光标预览都需要随光标移动持续重绘。
+    if ((m_tool == CreatePlane && !m_creationPoints.isEmpty()) ||
+        (m_tool == BrushTool && m_gesture != Gesture::Brush && m_doc.hasLoadedImage()))
         update();
     if (m_tool == MarqueeTool && m_gesture == Gesture::Selection &&
         (event->buttons() & Qt::LeftButton)) {

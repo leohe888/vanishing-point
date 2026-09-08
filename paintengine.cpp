@@ -10,7 +10,7 @@
 using namespace PlaneMath;
 
 // 在面片透视下于 UV 位置落下一个软边笔触点，返回画布脏矩形。
-QRect PaintEngine::applyDab(QPainter &painter, const Facet &facet, const QPointF &uv)
+QRect PaintEngine::applyDab(QPainter &painter, const Facet &facet, const QPointF &uv) const
 {
     // 把画笔直径换算到归一化 UV 空间：用面片的平均水平边长估计
     // UV -> 画布 的局部尺度。这样同一个笔触点在透视下保持一致的视觉粗细。
@@ -45,7 +45,9 @@ QRect PaintEngine::applyDab(QPainter &painter, const Facet &facet, const QPointF
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setWorldTransform(uvToCanvas);
+    // 与 painter 现有变换相乘：写入绘画层时是 identity，组合结果就是 uvToCanvas；
+    // 画到画布控件的 painter 上时则会带上视图的平移/缩放。
+    painter.setWorldTransform(uvToCanvas, true);
     painter.setPen(Qt::NoPen);
     painter.setBrush(gradient);
     painter.drawEllipse(QPointF(uv), radiusUv, radiusUv);
