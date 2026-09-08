@@ -97,6 +97,8 @@ private:
     QPainterPath selectionPath() const;
     void updateSelection(const QPointF &point, Qt::KeyboardModifiers modifiers);
     int copySelectionToFloatingImage(const QPointF &point);
+    // 把 Ctrl 拖动（区域克隆）的结果提取为浮动图像，而不是烘焙进绘画层
+    int cloneSelectionToFloatingImage();
     void fillSelectionFromPoint(const QPointF &point);
     void clearSelection();
 
@@ -128,6 +130,7 @@ private:
     QRectF m_selectionRect;                   // 展开曲面坐标中的矩形选区
     QRectF m_selectionStartRect;
     QPointF m_selectionPressSurface;
+    QPointF m_selectionFillOffset;        // 区域克隆当前的取样偏移（展开曲面坐标）
     int m_selectionGroup = -1;
     SelectionAction m_selectionAction = SelectionAction::None;
     QImage m_selectionSampleSource;

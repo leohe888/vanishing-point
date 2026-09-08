@@ -309,6 +309,7 @@ void PerspectiveCanvas::fillSelectionFromPoint(const QPointF &point)
     if (!pointToSelectionSurface(point, &sourceAnchor))
         return;
     const QPointF sourceOffset = sourceAnchor - m_selectionPressSurface;
+    m_selectionFillOffset = sourceOffset;
     const QPainterPath targetPath = selectionPath();
     const QRect dirty = targetPath.boundingRect().toAlignedRect().adjusted(-1, -1, 1, 1)
                             .intersected(m_doc.paintLayer().rect());
@@ -434,7 +435,68 @@ int PerspectiveCanvas::copySelectionToFloatingImage(const QPointF &point)
     return m_doc.addFloatingImageOnSurface(extracted, m_selectionFaces, hostFace, rect.topLeft());
 }
 
-// 将当前浮动图像顺时针旋转 90°
+// 把 Ctrl 拖动（区域克隆）的结果提取为一张浮动图像。
+// 与 fillSelectionFromPoint 使用同一套「源面 → 目标」单应，只是目标由画布
+// 坐标换成展开曲面上的矩形位图，因此拖动结果可以继续被移动、缩放。
+int PerspectiveCanvas::cloneSelectionToFloatingImage()
+{
+    const QRectF rect = m_selectionRect.normalized();
+    if (m_selectionSampleSource.isNull() || m_selectionFaces.isEmpty()
+        || rect.width() < 1 || rect.height() < 1) {
+        return -1;
+    }
+    const QSize size(qMin(8192, qMax(1, qCeil(rect.width()))),
+                     qMin(8192, qMax(1, qCeil(rect.height()))));
+    QImage extracted(size, QImage::Format_ARGB32_Premultiplied);
+    extracted.fill(Qt::transparent);
+    QPainter painter(&extracted);
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+
+    const QPointF origin = rect.topLeft();
+    QPainterPath bounds;                  // 位图范围，等价于选区矩形
+    bounds.addRect(QRectF(QPointF(), QSizeF(size)));
+    int hostFace = 0;
+    for (int i = 0; i < m_selectionFaces.size(); ++i) {
+        if (planePolygon(m_selectionFaces[i].surfaceCorner)
+                .containsPoint(m_selectionPressSurface, Qt::OddEvenFill)) {
+            hostFace = i;
+        }
+    }
+    // 每个「目标面 + 源面」组合是一片单应补丁，裁剪规则与填充预览保持一致，
+    // 因此松手前后看到的像素不会跳变。
+    for (const Facet &targetFace : m_selectionFaces) {
+        QPolygonF targetQuad;
+        for (int c = 0; c < 4; ++c)
+            targetQuad.append(targetFace.surfaceCorner[c] - origin);
+        QPainterPath targetSurface;
+        targetSurface.addPolygon(targetQuad);
+        targetSurface.closeSubpath();
+        for (const Facet &sourceFace : m_selectionFaces) {
+            QPolygonF shifted;            // 源面按拖动偏移搬到目标位置后，在位图中的四边形
+            for (int c = 0; c < 4; ++c)
+                shifted.append(sourceFace.surfaceCorner[c] - m_selectionFillOffset - origin);
+            QPainterPath sourceDomain;
+            sourceDomain.addPolygon(shifted);
+            sourceDomain.closeSubpath();
+            const QPainterPath clip = bounds.intersected(targetSurface).intersected(sourceDomain);
+            if (clip.isEmpty())
+                continue;
+            QPolygonF sourceCanvas;
+            for (int c = 0; c < 4; ++c)
+                sourceCanvas.append(sourceFace.corner[c]);
+            const ProjectiveMapping mapping(sourceCanvas, shifted);
+            if (!mapping.isValid())
+                continue;
+            painter.save();
+            painter.setClipPath(clip);
+            painter.setWorldTransform(mapping.forward());
+            painter.drawImage(QPointF(), m_selectionSampleSource);
+            painter.restore();
+        }
+    }
+    painter.end();
+    return m_doc.addFloatingImageOnSurface(extracted, m_selectionFaces, hostFace, rect.topLeft());
+}
 
 
 // 将当前浮动图像水平翻转
@@ -503,7 +565,7 @@ void PerspectiveCanvas::setTool(Tool tool)
         tr("在平面内拖动进行透视绘画，笔触可延伸到平面之外"),
         tr("Alt+左键设置源点；在透视平面内拖动仿制。对齐时源点持续跟随光标"),
         tr("拖动控制点缩放，角点外侧拖动旋转；Shift 等比缩放/15°旋转，Alt 中心缩放；Esc 取消"),
-        tr("拖动创建透视选区；Shift 正方形；Alt 拖动复制内容；Ctrl 拖动取色填充")
+        tr("拖动创建透视选区；Shift 正方形；Alt 拖动复制内容；Ctrl 拖动克隆为浮动图像")
     };
     emit statusMessage(messages[tool]);
     update();
@@ -848,6 +910,18 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             update();
             return;
         }
+        // 已选中的浮动图像（例如刚由 Ctrl 拖动生成的那张）可以直接拖动移动，
+        // 未选中的图像则不拦截，仍可在其上建立新的选区。
+        if (hitImage && grabbedImage == m_doc.selectedImage()) {
+            m_draggingImage = grabbedImage;
+            m_gesture = Gesture::Image;
+            m_doc.beginEdit();
+            m_imageTool.beginMove(m_doc.image(grabbedImage), grabbedImagePoint);
+            m_stateChanged = false;
+            setCursor(Qt::ClosedHandCursor);
+            update();
+            return;
+        }
         const int planeIndex = planeAt(m_doc.planes(), point);
         if (planeIndex < 0) {
             clearSelection();
@@ -1185,8 +1259,21 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
         return;
     if (m_tool == MarqueeTool && m_gesture == Gesture::Selection) {
         updateSelection(toImage(event->position()), event->modifiers());
-        if (m_selectionAction == SelectionAction::Fill)
+        if (m_selectionAction == SelectionAction::Fill) {
+            // 克隆结果不再烘焙进绘画层：改由一张浮动图像承载，之后还能继续移动。
+            m_doc.cancelEdit();           // 丢弃拖动过程中写进绘画层的预览像素
+            const int imageIndex = cloneSelectionToFloatingImage();
+            if (imageIndex >= 0) {
+                clearSelection();
+                m_gesture = Gesture::Idle;
+                m_stateChanged = false;
+                emit statusMessage(tr("已把拖动结果生成为浮动图像，可直接拖动移动"), 3000);
+                update();
+                return;
+            }
+        } else {
             m_doc.commitEdit(m_stateChanged);
+        }
         if (m_selectionRect.width() < 1 || m_selectionRect.height() < 1)
             clearSelection();
         m_selectionAction = SelectionAction::None;
