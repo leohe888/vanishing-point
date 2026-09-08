@@ -207,6 +207,34 @@ void PerspectiveCanvas::dropFloatingImage(const QImage &image, const QString &st
     emit statusMessage(statusText, 3000);
 }
 
+// 把当前选中的浮动图像按当前几何画进绘画层，并删除该浮动图像。
+// 烘焙之后内容彻底并入绘画层：不再能单独移动、缩放或删除。
+// 走的是与屏幕渲染完全相同的分段投影路径，因此肉眼看不到像素跳变。
+void PerspectiveCanvas::bakeSelectedImage()
+{
+    if (!hasSelectedImage())
+        return;
+    const int index = m_doc.selectedImage();
+    const FloatingImage image = m_doc.image(index);  // 拷贝：移除后仍需用它的几何算脏矩形
+    m_doc.beginPaintTransaction();
+    QPainter painter(&m_doc.paintLayer());
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    SceneRenderer(m_doc).renderFloatingImage(painter, image);
+    painter.end();
+    const QRect dirty = ImageGeometry::get(image)->outline().boundingRect().toAlignedRect()
+                            .adjusted(-2, -2, 2, 2).intersected(m_doc.paintLayer().rect());
+    m_doc.addPaintDirty(dirty);
+    // 删除会顺带取消选中，并在同一步历史里记录结构变化与绘画层增量，
+    // 撤销时两者一起回退。
+    m_doc.removeFloatingImage(index);
+    m_imageTool.reset();
+    m_draggingImage = -1;
+    m_gesture = Gesture::Idle;
+    m_stateChanged = false;
+    update();
+    emit statusMessage(tr("浮动图像已合并到绘画层"), 2500);
+}
+
 void PerspectiveCanvas::clearSelection()
 {
     m_selectionFaces.clear();
@@ -860,8 +888,12 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
     int grabbedImage = -1;
     const bool hitImage = insideCanvas && floatingImageAt(point, &grabbedImage, &grabbedImagePoint);
     if (!hitImage && m_doc.selectedImage() >= 0) {
-        m_doc.setSelectedImage(-1);
-        update();
+        // 点击别处：把选中的浮动图像烘焙进绘画层，之后不再是可操作对象。
+        // 这一下点击只用于确认烘焙，不再触发工具的其它动作，
+        // 避免误落一笔或误建一个选区。
+        bakeSelectedImage();
+        updateHoverCursor(point);
+        return;
     }
     if (!insideCanvas)
         return;

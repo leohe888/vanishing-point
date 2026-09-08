@@ -36,10 +36,11 @@ public:
     // 各投影片段的并集外轮廓，不包含平面之间的内部接缝。
     static QPainterPath floatingImageOutline(const FloatingImage &image);
 
-private:
-    // 渲染一张浮动图像：未吸附时直接绘制；已吸附时按几何快照分段投影，
-    // 使图像可以跨越共享接缝。
+    // 把一张浮动图像单独绘制到指定 QPainter（画布坐标、视图缩放为 1）。
+    // 正常渲染与「烘焙进绘画层」共用这条路径，两处看到的像素完全一致。
     void renderFloatingImage(QPainter &painter, const FloatingImage &image) const;
+
+private:
     // 绘制面片的编辑辅助元素：外框、内部网格，以及选中且处于编辑
     // 工具时的控制点方块。
     void drawPlaneGuides(QPainter &painter, const Facet &facet, bool selected,

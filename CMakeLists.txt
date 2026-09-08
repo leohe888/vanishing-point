@@ -1,15 +1,13 @@
-# 消失点（Vanishing Point）透视绘画工具 - CMake 构建脚本
 cmake_minimum_required(VERSION 3.19)
 project(VanisingPoint LANGUAGES CXX)
 
-# 查找 Qt6（>= 6.5），需要 Core 与 Widgets 模块
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
 
 qt_standard_project_setup()
 
-# 核心逻辑只依赖 Core/Gui，界面层依赖 Widgets；应用和测试共享已编译库。
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 add_library(VanishingCore STATIC
     projectivemapping.cpp projectivemapping.h
     planemath.cpp planemath.h
@@ -33,17 +31,20 @@ add_library(VanishingWidgets STATIC
 )
 target_link_libraries(VanishingWidgets PUBLIC VanishingCore Qt::Widgets)
 
-qt_add_executable(VanisingPoint WIN32 MACOSX_BUNDLE main.cpp resources.qrc)
+qt_add_executable(VanisingPoint WIN32 MACOSX_BUNDLE main.cpp)
 target_link_libraries(VanisingPoint PRIVATE VanishingWidgets)
 
-# 安装规则：Bundle 安装到根目录，其余平台按标准目录安装
+qt_add_resources(VanisingPoint app_resources
+    PREFIX "/icons"
+    FILES app.ico
+)
+
 install(TARGETS VanisingPoint
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
-# 生成各平台的部署脚本（打包所需的 Qt 运行时依赖）
 qt_generate_deploy_app_script(
     TARGET VanisingPoint
     OUTPUT_SCRIPT deploy_script

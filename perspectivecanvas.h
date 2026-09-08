@@ -87,6 +87,8 @@ private:
     void updateImageTransform(const QPointF &point, Qt::KeyboardModifiers modifiers);
     // 把拖入的图像设置为新的浮动图像并提示
     void dropFloatingImage(const QImage &image, const QString &statusText);
+    // 把当前选中的浮动图像合并（烘焙）进绘画层，之后不再是可操作对象
+    void bakeSelectedImage();
     // 用当前 4 个创建角点生成平面；有效时追加到文档并进入编辑工具
     void finishPlaneCreation();
     void beginClone(const QPointF &point, bool pickSource);
