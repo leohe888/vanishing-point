@@ -131,32 +131,30 @@ void CanvasDocument::removePlane(int index)
 {
     if (index < 0 || index >= m_planes.size())
         return;
-    // If this plane was created by extrusion, release every matching edge on
-    // its neighbours before removing it so their shared-edge handles return.
+    // 删除前先解除共用边的锁定。这里必须依赖 parentPlane / parentEdge 这条
+    // 显式关系，不能靠"两端点几何重合"来判断：子平面被缩放后（延长它的邻边会
+    // 连带改变共用边的长度），共用边的端点已经不再与父平面重合，几何匹配会失效，
+    // 父平面的锁定边就永远解不开——表现为删除子平面后，父平面共用边上的三个控制点
+    // 仍锁死、平面也拖不动。
     const Plane removed = m_planes[index];
+    auto unlockEdge = [this](int planeIndex, int edge) {
+        if (planeIndex >= 0 && planeIndex < m_planes.size() && edge >= 0 && edge < 4)
+            m_planes[planeIndex].lockedEdges &= quint8(~(1u << edge));
+    };
+    // 被删的是子平面：解锁父平面上被它共用的那条边。
+    unlockEdge(removed.parentPlane, removed.parentEdge);
     for (int other = 0; other < m_planes.size(); ++other) {
         if (other == index)
             continue;
         if (m_planes[other].parentPlane == index) {
+            // 被删的是父平面：子平面的第 0 条边就是共用边。
+            unlockEdge(other, 0);
             m_planes[other].parentPlane = -1;
             m_planes[other].parentEdge = -1;
             m_planes[other].relativeAngle = 90.0;
             m_planes[other].angleAdjusted = false;
         } else if (m_planes[other].parentPlane > index) {
             --m_planes[other].parentPlane;
-        }
-        for (int edge = 0; edge < 4; ++edge) {
-            const QPointF a = m_planes[other].corner[edge];
-            const QPointF b = m_planes[other].corner[(edge + 1) % 4];
-            for (int removedEdge = 0; removedEdge < 4; ++removedEdge) {
-                const QPointF ra = removed.corner[removedEdge];
-                const QPointF rb = removed.corner[(removedEdge + 1) % 4];
-                if ((QLineF(a, ra).length() < 0.01 && QLineF(b, rb).length() < 0.01) ||
-                    (QLineF(a, rb).length() < 0.01 && QLineF(b, ra).length() < 0.01)) {
-                    m_planes[other].lockedEdges &= quint8(~(1u << edge));
-                    break;
-                }
-            }
         }
     }
     m_planes.removeAt(index);
