@@ -8,6 +8,7 @@
 #include <QCheckBox>
 #include <QFileDialog>
 #include <QFrame>
+#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
@@ -105,7 +106,8 @@ void MainWindow::buildUi()
     // 把数值标签与滑块放在同一行容器里，这样按工具切换可见性时
     // 可以整行隐藏，不会留下孤立的控件。
     auto addSlider = [side, sideLayout](const QString &name, int minimum, int maximum,
-                                        int value, QWidget **rowOutput) {
+                                        int value, QWidget **rowOutput,
+                                        QLabel **numberOutput = nullptr) {
         auto *row = new QWidget(side);
         auto *layout = new QHBoxLayout(row);
         layout->setContentsMargins(0, 7, 0, 0);
@@ -121,6 +123,8 @@ void MainWindow::buildUi()
         slider->setValue(value);
         sideLayout->addWidget(slider);
         *rowOutput = row;
+        if (numberOutput)
+            *numberOutput = number;
         QObject::connect(slider, &QSlider::valueChanged, number,
                          [number](int v) { number->setText(QString::number(v)); });
         return slider;
@@ -137,7 +141,10 @@ void MainWindow::buildUi()
     m_planeTitle->setObjectName("sectionTitle");
     sideLayout->addWidget(m_planeTitle);
     m_gridSize = addSlider(tr("网格大小"), 10, 200, 50, &m_gridSizeRow);
-    m_planeAngle = addSlider(tr("角度"), 0, 360, 90, &m_planeAngleRow);
+    m_planeAngle = addSlider(tr("角度"), 0, 360, 90, &m_planeAngleRow, &m_planeAngleValue);
+    // 锁定态用半透明整行区分，避免用 QSS 定制 handle（带 border 会让滑块渲染异常）
+    m_planeAngle->setGraphicsEffect(new QGraphicsOpacityEffect(m_planeAngle));
+    m_planeAngleRow->setGraphicsEffect(new QGraphicsOpacityEffect(m_planeAngleRow));
     auto *aligned = new QCheckBox(tr("对齐"), side);
     aligned->setChecked(true);
     aligned->setToolTip(tr("勾选：松开鼠标后源点继续跟随；取消：每一笔从最初的源点重新取样"));
@@ -181,6 +188,7 @@ void MainWindow::buildUi()
         #sectionTitle { color:#f1f3f5; font-size:15px; font-weight:600; }
         #hint { color:#aeb4bc; }
         QLabel { color:#d7dbe0; }
+        QLabel:disabled { color:#6f757c; }
         QCheckBox { color:#d7dbe0; }
         QToolButton { color:#dfe3e8; background:#3b4047; border:1px solid #4a5058;
                       border-radius:4px; text-align:left; padding-left:12px; }
@@ -225,9 +233,9 @@ void MainWindow::buildUi()
     connect(m_planeAngle, &QSlider::valueChanged, m_canvas,
             [this](int angle) { m_canvas->setPlaneAngle(angle); });
     connect(m_canvas, &PerspectiveCanvas::planeAngleChanged, this,
-            [this](qreal angle, bool editable) {
+            [this](qreal angle, bool) {
                 m_planeAngle->setValue(qRound(angle));
-                m_planeAngle->setEnabled(editable);
+                updatePlaneAngleState();
             });
     connect(aligned, &QCheckBox::toggled, m_canvas, &PerspectiveCanvas::setCloneAligned);
     connect(colorButton, &QPushButton::clicked, this, &MainWindow::chooseColor);
@@ -288,8 +296,29 @@ void MainWindow::updateToolOptions(int toolId)
     m_gridSize->setVisible(showGridSettings);
     m_planeAngleRow->setVisible(showGridSettings);
     m_planeAngle->setVisible(showGridSettings);
-    m_planeAngle->setEnabled(m_canvas->canSetSelectedPlaneAngle());
+    updatePlaneAngleState();
     m_planeTitle->setVisible(showGridSettings);
+}
+
+void MainWindow::updatePlaneAngleState()
+{
+    const bool editable = m_canvas->canSetSelectedPlaneAngle();
+    const QString reason = m_canvas->planeAngleLockReason();
+
+    // 滑块与“角度 + 数值”整行一起置灰；再叠加半透明，让锁定态一眼可辨。
+    m_planeAngle->setEnabled(editable);
+    m_planeAngleRow->setEnabled(editable);
+    const qreal opacity = editable ? 1.0 : 0.45;
+    if (auto *effect = qobject_cast<QGraphicsOpacityEffect *>(m_planeAngle->graphicsEffect()))
+        effect->setOpacity(opacity);
+    if (auto *effect = qobject_cast<QGraphicsOpacityEffect *>(m_planeAngleRow->graphicsEffect()))
+        effect->setOpacity(opacity);
+
+    if (editable)
+        m_planeAngle->setToolTip(tr("调整子平面与父平面的夹角：0° 展开，90° 垂直，180° 折回"));
+    else
+        m_planeAngle->setToolTip(reason);
+    m_planeAngleRow->setToolTip(reason);
 }
 
 // 打开颜色对话框，选择画笔颜色并同步更新色块预览

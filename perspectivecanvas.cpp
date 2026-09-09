@@ -108,6 +108,20 @@ bool PerspectiveCanvas::canSetSelectedPlaneAngle() const
     return true;
 }
 
+QString PerspectiveCanvas::planeAngleLockReason() const
+{
+    const int index = m_doc.selectedPlane();
+    if (index < 0 || index >= m_doc.planes().size())
+        return tr("请先选中一个平面。");
+    if (m_doc.planes()[index].parentPlane < 0)
+        return tr("只有从别的平面拖出的子平面才有夹角，当前平面是独立平面。");
+    for (const Plane &child : m_doc.planes()) {
+        if (child.parentPlane == index && child.angleAdjusted)
+            return tr("它的子平面调整过夹角，父平面角度已锁定，避免整条共享曲面链被重新解释。");
+    }
+    return QString();
+}
+
 void PerspectiveCanvas::setPlaneAngle(qreal angle)
 {
     if (!canSetSelectedPlaneAngle() || !qIsFinite(angle))

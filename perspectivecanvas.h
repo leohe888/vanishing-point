@@ -35,6 +35,8 @@ public:
     bool hasSelectedImage() const { return m_doc.selectedImage() >= 0 && m_doc.selectedImage() < m_doc.images().size(); }
     qreal selectedPlaneAngle() const;
     bool canSetSelectedPlaneAngle() const;
+    // 返回“为什么不能调整夹角”的说明文字；空串表示当前可以调整。
+    QString planeAngleLockReason() const;
     QColor brushColor() const { return m_paint.color(); }
 
 public slots:

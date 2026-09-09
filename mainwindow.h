@@ -22,6 +22,7 @@ private:
     void buildUi();                     // 构建全部界面控件、样式表与信号连接
     void chooseColor();                 // 打开颜色对话框并更新画笔颜色
     void updateToolOptions(int toolId); // 根据当前工具显示/隐藏对应的参数行
+    void updatePlaneAngleState();       // 根据“能否调整夹角”切换角度滑块的可用与锁定样式
 
     PerspectiveCanvas *m_canvas = nullptr; // 透视画布（核心绘制区域）
     QButtonGroup *m_tools = nullptr;       // 互斥的工具选择按钮组
@@ -30,6 +31,7 @@ private:
     QSlider *m_opacity = nullptr;          // 笔刷不透明度滑块
     QSlider *m_gridSize = nullptr;         // 平面网格大小滑块
     QSlider *m_planeAngle = nullptr;       // 子平面角度滑块（0–360°）
+    QLabel *m_planeAngleValue = nullptr;   // 角度滑块旁的数值标签（随锁定一起灰化）
     QLabel *m_colorSwatch = nullptr;       // 当前画笔颜色的色块预览
     QWidget *m_brushTitle = nullptr;       // “笔刷设置”标题（按工具显隐）
     QWidget *m_planeTitle = nullptr;       // “平面设置”标题（按工具和文档显隐）
