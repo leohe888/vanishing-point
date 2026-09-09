@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 project(VanisingPoint LANGUAGES CXX)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Widgets Test)
 
 qt_standard_project_setup()
 
@@ -51,3 +51,7 @@ qt_generate_deploy_app_script(
     NO_UNSUPPORTED_PLATFORM_ERROR
 )
 install(SCRIPT ${deploy_script})
+
+# —— 单元测试 ——
+enable_testing()
+add_subdirectory(tests)

@@ -22,7 +22,7 @@ cmake --build build
 
 - 用 Qt Creator 直接打开 `CMakeLists.txt` 同样可以，仓库里已保留 `build/Desktop_Qt_*_MinGW_64_bit_Debug` 与 `..._Release` 两套构建目录。
 - 命令行构建时请把 Qt 与编译器的 `bin` 目录放进 `PATH`（Windows 下需要 Qt 运行库才能启动程序）。
-- `-DVP_BUILD_TESTS=ON` 会启用回归测试目标（需要 `tests/` 下的测试源文件，当前仓库未包含）。
+- 单元测试在 `tests/` 下，随主项目一起构建（无需额外开关）；构建后在构建目录跑 `ctest --output-on-failure` 即可。
 
 ## 操作说明
 
@@ -41,7 +41,7 @@ cmake --build build
 
 | 操作 | 快捷键 |
 | --- | --- |
-| 打开图像 / 导出结果 | 工具栏按钮（PNG、JPG） |
+| 打开图像 / 导出结果 | `Ctrl+O` / `Ctrl+S`，或工具栏按钮（PNG、JPG） |
 | 粘贴为浮动图像 | `Ctrl+V` |
 | 点击别处（有图像选中时） | 把浮动图像合并进绘画层，之后不能再单独操作 |
 | 撤销 / 重做 | `Ctrl+Z` / `Ctrl+Shift+Z` |
@@ -84,6 +84,8 @@ VanishingWidgets（依赖 Qt Widgets 的界面层）
 ```
 
 分层的关键约束：`VanishingCore` 不引入任何 Widgets 头；几何、文档、绘画引擎、渲染各自独立，工具只维护自己的拖动状态，由 `PerspectiveCanvas` 负责分派与提交事务。
+
+想改代码的话，[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 里有更深入的导览：分层理由、三套坐标系统的区别、一次操作的数据流、各模块职责速查与常见陷阱。
 
 ## 历史与性能
 

@@ -19,7 +19,6 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
-// 构建并初始化主窗口的全部界面
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     buildUi();
@@ -29,41 +28,61 @@ MainWindow::~MainWindow() = default;
 
 void MainWindow::buildUi()
 {
-    // 主窗口只负责控件本身。所有几何、渲染与交互状态都保存在
-    // PerspectiveCanvas 中。
-    setWindowTitle(tr("消失点 / Vanishing Point"));
+    // 设置窗口标题
+    setWindowTitle(tr("消失点"));
+
+    // 调整窗口大小
     resize(1280, 820);
 
+    // 添加工具栏
     auto *fileBar = addToolBar(tr("文件"));
-    fileBar->setMovable(false);
+    fileBar->setMovable(false); // 不可被用户拖动
+
+    // 添加动作和分隔符
     auto *openAction = fileBar->addAction(tr("打开图像"));
     auto *saveAction = fileBar->addAction(tr("导出结果"));
     fileBar->addSeparator();
     auto *undoAction = fileBar->addAction(tr("撤销"));
     auto *redoAction = fileBar->addAction(tr("重做"));
+
+    // 将保存/撤销/重做动作设置为禁用状态
+    saveAction->setEnabled(false);
     undoAction->setEnabled(false);
     redoAction->setEnabled(false);
+
+    // 给动作设置快捷键
+    openAction->setShortcut(QKeySequence::Open);
+    saveAction->setShortcut(QKeySequence::Save);
     undoAction->setShortcuts(QKeySequence::keyBindings(QKeySequence::Undo));
     QList<QKeySequence> redoShortcuts = QKeySequence::keyBindings(QKeySequence::Redo);
     if (!redoShortcuts.contains(QKeySequence("Ctrl+Shift+Z")))
         redoShortcuts.append(QKeySequence("Ctrl+Shift+Z"));
     redoAction->setShortcuts(redoShortcuts);
-    saveAction->setEnabled(false);
 
+    // root 为中心部件
     auto *root = new QWidget(this);
+
+    // root 采用水平布局
     auto *rootLayout = new QHBoxLayout(root);
     rootLayout->setContentsMargins(0, 0, 0, 0);
     rootLayout->setSpacing(0);
+
+    // side 为 root 左侧的工具面板
     auto *side = new QFrame(root);
     side->setObjectName("sidePanel");
     side->setFixedWidth(238);
+
+    // side 采用垂直布局
     auto *sideLayout = new QVBoxLayout(side);
     sideLayout->setContentsMargins(14, 16, 14, 16);
     sideLayout->setSpacing(10);
+
+    // “透视工具”标题
     auto *title = new QLabel(tr("透视工具"), side);
     title->setObjectName("sectionTitle");
     sideLayout->addWidget(title);
 
+    // 给 side 添加透视工具按钮
     m_tools = new QButtonGroup(this);
     m_tools->setExclusive(true);
     const QStringList toolNames{tr("创建平面  (C)"), tr("编辑平面  (V)"),
@@ -143,9 +162,12 @@ void MainWindow::buildUi()
     sideLayout->addStretch();
     sideLayout->addWidget(hint);
 
+    // m_canvas 为 root 右侧的画布
     m_canvas = new PerspectiveCanvas(root);
+
     rootLayout->addWidget(side);
     rootLayout->addWidget(m_canvas, 1);
+
     setCentralWidget(root);
 
     setStyleSheet(R"(
