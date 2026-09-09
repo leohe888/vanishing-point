@@ -45,7 +45,8 @@ bool PlaneEditTool::update(const QPointF &point, Plane *result)
         m_accumulatedRotation += qRadiansToDegrees(delta);
         m_lastPointerAngle = currentAngle;
         candidate = PlaneMath::rotateChildPlane(m_start, edge,
-                                                 m_start.relativeAngle + m_accumulatedRotation);
+                                                 m_start.relativeAngle + m_accumulatedRotation,
+                                                 m_canvasSize);
     }
     else if (m_handle >= 0 && m_handle < 4)
         candidate.corner[m_handle] = point;

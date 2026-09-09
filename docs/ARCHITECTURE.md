@@ -144,6 +144,7 @@ enum class Gesture { Idle, Plane, Image, Brush, Clone, Selection };
 | 画笔手感、笔触形状 | `paintengine.cpp` |
 | 图章/仿制逻辑 | `clonestampengine.cpp` + `clonetool.cpp` |
 | 平面创建、垂直平面拖出 | `planemath.cpp` + `planeedittool.cpp` |
+| 子平面夹角调整 | `planemath.cpp` 的 `rotateChildPlane`（见第 10 节） |
 | 浮动图像移动、缩放、旋转 | `floatingimagemath.cpp` + `imagetransformtool.cpp` |
 | 撤销 / 重做 | `canvasdocument.cpp` 的 `HistoryEntry` |
 | 屏幕上的线、控制点怎么画 | `scenerenderer.cpp` |
@@ -202,6 +203,8 @@ struct HistoryEntry {
 - **绕过 `mapVisible`**：直接用 `QTransform::map` 做射影变换，遇到极点/地平线会产生翻转的诡异图形。
 - **改动 `corner` 后忘记同步 `surfaceCorner`**：会让整张展开图重新标定，相邻平面在接缝处把同一个曲面坐标送到不同画布点，跨缝内容就会错位（见 `resizePlaneAlongEdge` 里的详细注释）。
 - **给 `Q_OBJECT` 类改成员布局后没做干净重建**：旧的 moc 产物会让元对象系统与真实类布局不一致，典型症状是启动即崩（异常码 `0xc0000374`）。必须清掉 `*_autogen/` 和目标文件后全量重建。
+- **把三维旋转写成图像上的二维旋转**：绕一条三维直线旋转的投影**不是**圆周运动。凡是"夹角""翻转""绕边旋转"这类需求，都必须先反投影到三维、旋转、再投影回图像（见第 10 节）。
+- **忘记内参矩阵**：把相机坐标 `(X, Y, Z)` 直接当图像坐标 `(X/Z, Y/Z)` 用，漏掉 `cx + f·X/Z`。症状是结果全挤在原点附近。
 
 ---
 
@@ -215,6 +218,31 @@ cmake --build . --target tst_planemath tst_projectivemapping
 ctest --output-on-failure
 ```
 
+> 在 Git Bash 里直接 `ctest` 需要把 Qt 的 bin 目录加入 `PATH`，否则测试进程报 `0xc0000135`（找不到 DLL）：
+> `export PATH="/d/Software/Qt/6.11.2/mingw_64/bin:/d/Software/Qt/Tools/mingw1310_64/bin:$PATH"`
+
 纯逻辑用 `QTEST_APPLESS_MAIN`（连 `QCoreApplication` 都不建），链接 `VanishingCore + Qt::Test`。加新测试：新建 `tests/tst_xxx.cpp`，然后在 `tests/CMakeLists.txt` 里复制一个 `qt_add_executable` + `add_test` 块。
 
 > Windows 注意：在 Git Bash 里直接 `./tst_xxx.exe` 跑，stdout 是空的（Qt Test 检测到 stdout 是管道时走 `WriteConsoleW`）。退出码仍然可信（0 = 通过），看详细结果用 `-o <路径>,txt`，或用 `ctest`。
+
+涉及透视几何的测试，推荐**合成一台内参已知的相机**：直接把世界坐标里的矩形投影成图像四边形，这样任意状态下的正确答案都能算出来，比手搓期望坐标可靠得多（`tests/tst_planemath.cpp` 里的 `TestCamera` / `TestWall` 就是这么做的）。
+
+---
+
+## 10. 子平面夹角：为什么必须是三维旋转
+
+`Plane::relativeAngle` 是**三维语义**（两个平面的二面角），但早期实现却是图像平面上的二维圆周运动——把两个外侧角点绕共享边的端点转。两者根本不是一回事：绕三维直线旋转，投影后外侧角点是沿着"指向第三个消失点"的射线滑动，而不是画圆弧。结果就是数值与几何互相脱节：把夹角调到 0°，两个平面看上去仍然有角度。
+
+`rotateChildPlane` 现在的四步：
+
+1. **求消失点**：由子平面自身求出共享边方向 `u` 与进深方向 `v` 的消失点（两条对边各交于一点）。
+2. **解相机内参**：主点固定在图像中心，`f² = -(Vu − c)·(Vv − c)`（子平面在世界中是矩形，故 `u ⊥ v`）。解不合理时退回与画幅相关的经验焦距。
+3. **反投影**：由 `u × v` 得到子平面法向，把四个角点拉回到平面 `n·X = h` 上。`h` 的取值只影响整体尺度，而透视投影对整体尺度不敏感，所以直接取共享边端点所在射线来定 `h` 即可。
+4. **旋转再投影**：用 Rodrigues 公式把外侧角点绕共享边转 `Δ = 目标角 − 当前角`，再经内参矩阵投影回图像。
+
+两个约定，改动前先读一遍：
+
+- **旋转轴统一为"由 `corner[edge]` 指向 `corner[edge+1]`"**。消失点是齐次量，符号任意；不统一的话，夹角增大的方向会随四边形绕向而变。
+- **0° = 完全展开**（与父平面共面、朝外延展，对应曲面空间里"展开"的那一侧），**180° = 折回父平面之上**。测试 `rotateChildPlane_zeroDegreeUnfoldsFlatOutsideParent` 专门锁住这条；只验证"进深消失点重合"是不够的——0° 和 180° 都共面，判据分不出方向。
+
+曲面坐标在旋转时**保持不变**：旋转不改变子平面的固有尺寸，纹理应当继续贴合角点，画布上的压缩就是透视缩短本身。

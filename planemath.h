@@ -81,7 +81,9 @@ bool perpendicularDirection(const Plane &source, const QPointF &atPoint,
 Plane makePerpendicularPlane(const Plane &source, int edge,
                              const QPointF &dragPoint, const QPointF &pressPoint,
                              const QSize &backgroundSize);
-// 调整子平面相对共享边的夹角，保持共享边端点不动。
-Plane rotateChildPlane(const Plane &source, int edge, qreal targetAngle);
+// 调整子平面相对共享边的夹角：绕共享边做三维旋转后重新投影回图像。
+// 因此 0° / 180° 时子平面与父平面严格共面（backgroundSize 用于估计焦距）。
+Plane rotateChildPlane(const Plane &source, int edge, qreal targetAngle,
+                       const QSize &backgroundSize);
 
 } // namespace PlaneMath

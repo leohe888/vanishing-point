@@ -4,9 +4,122 @@
 
 #include <QImage>
 #include <QLineF>
+#include <QSize>
 #include <QTransform>
-#include <QVector3D>
 #include <QtMath>
+
+#include <cmath>
+
+// —— 内部工具：双精度三维向量与相机模型 ——
+// 图像坐标可达数千，两条直线叉乘后的中间量会超过 float 的有效位数，
+// 因此这里不用 QVector3D，全部按双精度计算。
+namespace {
+
+struct Vec3 {
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+};
+
+Vec3 operator+(const Vec3 &a, const Vec3 &b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+Vec3 operator-(const Vec3 &a, const Vec3 &b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
+Vec3 operator*(const Vec3 &a, double s) { return {a.x * s, a.y * s, a.z * s}; }
+
+double dot(const Vec3 &a, const Vec3 &b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+
+Vec3 cross(const Vec3 &a, const Vec3 &b)
+{
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
+}
+
+bool normalize(Vec3 *v)
+{
+    const double length = std::sqrt(dot(*v, *v));
+    if (!qIsFinite(length) || length < 1e-12)
+        return false;
+    *v = *v * (1.0 / length);
+    return true;
+}
+
+// 图像点 / 图像直线的齐次表示
+Vec3 imagePoint(const QPointF &p) { return {p.x(), p.y(), 1.0}; }
+Vec3 joinLines(const Vec3 &a, const Vec3 &b) { return cross(a, b); } // 过两点的直线
+Vec3 meetLines(const Vec3 &l, const Vec3 &m) { return cross(l, m); } // 两直线的交点
+
+// 齐次点 -> 图像点；位于无穷远（w≈0）时失败
+bool toImagePoint(const Vec3 &v, QPointF *out)
+{
+    if (!out || qAbs(v.z) < 1e-12)
+        return false;
+    const QPointF p(v.x / v.z, v.y / v.z);
+    if (!qIsFinite(p.x()) || !qIsFinite(p.y()))
+        return false;
+    *out = p;
+    return true;
+}
+
+// 相机内参的估计值：主点固定在图像中心，焦距由一对正交消失点解出。
+struct CameraFrame {
+    double focal = 0.0;
+    double cx = 0.0;
+    double cy = 0.0;
+};
+
+// 由两个相互正交的世界方向的消失点解出焦距。
+// 退化（消失点在无穷远或解不合理）时返回与画幅相关的经验值。
+double focalFromOrthogonalVanishingPoints(const QPointF &vx, const QPointF &vy,
+                                          const QSize &backgroundSize)
+{
+    const double cx = backgroundSize.width() / 2.0;
+    const double cy = backgroundSize.height() / 2.0;
+    const double extent = qMax(backgroundSize.width(), backgroundSize.height());
+    const double fallback = extent * 1.2;
+    if (!qIsFinite(vx.x()) || !qIsFinite(vx.y()) || !qIsFinite(vy.x()) || !qIsFinite(vy.y()))
+        return fallback;
+    const double squared = -((vx.x() - cx) * (vy.x() - cx) + (vx.y() - cy) * (vy.y() - cy));
+    const double minimum = extent * 0.08;
+    const double maximum = extent * 20.0;
+    if (squared > minimum * minimum && squared < maximum * maximum)
+        return std::sqrt(squared);
+    return fallback;
+}
+
+// 消失点 -> 相机坐标系下的世界方向
+Vec3 vanishingDirection(const Vec3 &v, const CameraFrame &frame)
+{
+    return {v.x - frame.cx * v.z, v.y - frame.cy * v.z, frame.focal * v.z};
+}
+
+// 世界方向 -> 图像上的消失点（齐次；w≈0 表示位于无穷远）
+Vec3 projectDirection(const Vec3 &d, const CameraFrame &frame)
+{
+    return {frame.focal * d.x + frame.cx * d.z,
+            frame.focal * d.y + frame.cy * d.z,
+            d.z};
+}
+
+// 图像点 -> 相机坐标系下的射线
+Vec3 imageRay(const QPointF &p, const CameraFrame &frame)
+{
+    return {p.x() - frame.cx, p.y() - frame.cy, frame.focal};
+}
+
+// 相机坐标点 -> 图像点（经内参矩阵 K 投影）。
+// 落到相机后方或飞到极远处都视为失败。
+bool projectPoint(const Vec3 &p, const CameraFrame &frame, QPointF *out)
+{
+    if (!out || !(p.z > 1e-9))
+        return false;
+    const QPointF q(frame.cx + frame.focal * p.x / p.z,
+                    frame.cy + frame.focal * p.y / p.z);
+    if (!qIsFinite(q.x()) || !qIsFinite(q.y()) ||
+        qAbs(q.x()) > 1e7 || qAbs(q.y()) > 1e7)
+        return false;
+    *out = q;
+    return true;
+}
+
+} // namespace
 
 namespace PlaneMath {
 ProjectiveMapping surfaceMapping(const Facet &facet)
@@ -272,20 +385,17 @@ bool perpendicularDirection(const Plane &source, const QPointF &atPoint,
 {
     // 在齐次图像坐标下恢复源平面的两个消失点。
     // 齐次形式同时也能覆盖平行线族（消失点在无穷远）的情形。
-    auto imagePoint = [](const QPointF &p) {
-        return QVector3D(float(p.x()), float(p.y()), 1.0f);
-    };
-    const QVector3D p0 = imagePoint(source.corner[0]);
-    const QVector3D p1 = imagePoint(source.corner[1]);
-    const QVector3D p2 = imagePoint(source.corner[2]);
-    const QVector3D p3 = imagePoint(source.corner[3]);
-    const QVector3D line01 = QVector3D::crossProduct(p0, p1);
-    const QVector3D line32 = QVector3D::crossProduct(p3, p2);
-    const QVector3D line03 = QVector3D::crossProduct(p0, p3);
-    const QVector3D line12 = QVector3D::crossProduct(p1, p2);
-    const QVector3D vanishingX = QVector3D::crossProduct(line01, line32);
-    const QVector3D vanishingY = QVector3D::crossProduct(line03, line12);
-    if (vanishingX.lengthSquared() < 1e-12f || vanishingY.lengthSquared() < 1e-12f)
+    const Vec3 p0 = imagePoint(source.corner[0]);
+    const Vec3 p1 = imagePoint(source.corner[1]);
+    const Vec3 p2 = imagePoint(source.corner[2]);
+    const Vec3 p3 = imagePoint(source.corner[3]);
+    const Vec3 line01 = joinLines(p0, p1);
+    const Vec3 line32 = joinLines(p3, p2);
+    const Vec3 line03 = joinLines(p0, p3);
+    const Vec3 line12 = joinLines(p1, p2);
+    const Vec3 vanishingX = meetLines(line01, line32);
+    const Vec3 vanishingY = meetLines(line03, line12);
+    if (dot(vanishingX, vanishingX) < 1e-12 || dot(vanishingY, vanishingY) < 1e-12)
         return false;
 
     const qreal cx = backgroundSize.width() / 2.0;
@@ -295,44 +405,35 @@ bool perpendicularDirection(const Plane &source, const QPointF &atPoint,
 
     // 当两个消失点均为有限值、且两条网格轴代表相互正交的世界方向时，
     // 可由正交性解出焦距。
-    if (qAbs(vanishingX.z()) > 1e-6 && qAbs(vanishingY.z()) > 1e-6) {
-        const QPointF vx(vanishingX.x() / vanishingX.z(),
-                         vanishingX.y() / vanishingX.z());
-        const QPointF vy(vanishingY.x() / vanishingY.z(),
-                         vanishingY.y() / vanishingY.z());
-        const qreal inferredFocalSquared =
-            -QPointF::dotProduct(vx - QPointF(cx, cy), vy - QPointF(cx, cy));
-        const qreal minimumFocal = imageExtent * 0.08;
-        const qreal maximumFocal = imageExtent * 20.0;
-        if (inferredFocalSquared > minimumFocal * minimumFocal &&
-            inferredFocalSquared < maximumFocal * maximumFocal)
-            focalLength = qSqrt(inferredFocalSquared);
+    if (qAbs(vanishingX.z) > 1e-6 && qAbs(vanishingY.z) > 1e-6) {
+        QPointF vx;
+        QPointF vy;
+        if (toImagePoint(vanishingX, &vx) && toImagePoint(vanishingY, &vy))
+            focalLength = focalFromOrthogonalVanishingPoints(vx, vy, backgroundSize);
     }
 
-    auto cameraDirection = [cx, cy, focalLength](const QVector3D &v) {
-        return QVector3D(float(v.x() - cx * v.z()),
-                         float(v.y() - cy * v.z()),
-                         float(focalLength * v.z())).normalized();
-    };
-    const QVector3D directionX = cameraDirection(vanishingX);
-    const QVector3D directionY = cameraDirection(vanishingY);
-    QVector3D normal = QVector3D::crossProduct(directionX, directionY);
-    if (normal.lengthSquared() < 1e-10f)
+    const CameraFrame frame{focalLength, cx, cy};
+    Vec3 directionX = vanishingDirection(vanishingX, frame);
+    Vec3 directionY = vanishingDirection(vanishingY, frame);
+    if (!normalize(&directionX) || !normalize(&directionY))
         return false;
-    normal.normalize();
+    Vec3 normal = cross(directionX, directionY);
+    if (!normalize(&normal))
+        return false;
 
     // 把 3D 法线经内参矩阵 K 投影回图像。这就是与源平面垂直的所有
     // 平面共享的第三个消失点。
-    const qreal projectedX = focalLength * normal.x() + cx * normal.z();
-    const qreal projectedY = focalLength * normal.y() + cy * normal.z();
+    const Vec3 projected = projectDirection(normal, frame);
     QPointF projectedDirection;
-    if (qAbs(normal.z()) > 1e-6) {
-        const QPointF perpendicularVanishingPoint(projectedX / normal.z(),
-                                                  projectedY / normal.z());
+    if (qAbs(projected.z) > 1e-6) {
+        // 齐次分量 w 非零：第三个消失点是有限点。
+        QPointF perpendicularVanishingPoint;
+        if (!toImagePoint(projected, &perpendicularVanishingPoint))
+            return false;
         projectedDirection = perpendicularVanishingPoint - atPoint;
     } else {
         // 齐次分量 w 为零意味着第三个消失点位于无穷远处。
-        projectedDirection = QPointF(projectedX, projectedY);
+        projectedDirection = QPointF(projected.x, projected.y);
     }
 
     const qreal length = QLineF(QPointF(), projectedDirection).length();
@@ -456,30 +557,115 @@ Plane makePerpendicularPlane(const Plane &source, int edge,
     return result;
 }
 
-Plane rotateChildPlane(const Plane &source, int edge, qreal targetAngle)
+// 把子平面绕共享边做真正的三维旋转，再重新投影回图像。
+//
+// 以前这里做的是图像平面上的二维旋转：让两个外侧角点绕共享边的端点画圆弧。
+// 那是错的——绕三维直线旋转的投影并不是圆周运动，于是夹角数值与几何互相脱节，
+// 把夹角调到 0° 时两个平面看上去依然有角度。
+//
+// 现在的步骤：
+//  1. 由子平面自身的两个消失点解出相机内参，并把共享边方向 u、深度方向 v
+//     恢复成三维方向（u ⊥ v，因为子平面在世界里是矩形）；
+//  2. 由 u、v 重建子平面所在的三维平面，把四个角点反投影到该平面上；
+//  3. 用 Rodrigues 公式把外侧角点绕共享边（方向 u）旋转 Δ = 目标角 − 当前角；
+//  4. 重新投影回图像。
+// 旋转是刚体的，因此 0° 与 180° 时子平面必然与父平面共面。
+Plane rotateChildPlane(const Plane &source, int edge, qreal targetAngle,
+                       const QSize &backgroundSize)
 {
     Plane result = source;
-    if (edge < 0 || edge >= 4 || !qIsFinite(targetAngle))
+    if (edge < 0 || edge >= 4 || !qIsFinite(targetAngle) || backgroundSize.isEmpty())
         return result;
+
     const int next = (edge + 1) % 4;
-    const int outerA = (edge + 2) % 4; // 与共享边 next 端点相连
-    const int outerB = (edge + 3) % 4; // 与共享边 edge 端点相连
+    const int farB = (edge + 2) % 4; // 外侧角点，与共享边的 next 端点相连
+    const int farA = (edge + 3) % 4; // 外侧角点，与共享边的 edge 端点相连
     const QPointF seamA = source.corner[edge];
     const QPointF seamB = source.corner[next];
-    const qreal delta = targetAngle - source.relativeAngle;
-    auto rotateAround = [delta](const QPointF &p, const QPointF &pivot) {
-        const qreal radians = qDegreesToRadians(delta);
-        const qreal c = qCos(radians), s = qSin(radians);
-        const QPointF v = p - pivot;
-        return pivot + QPointF(c * v.x() - s * v.y(), s * v.x() + c * v.y());
-    };
-    result.corner[outerA] = rotateAround(source.corner[outerA], seamB);
-    result.corner[outerB] = rotateAround(source.corner[outerB], seamA);
 
-    const QPointF surfaceA = source.surfaceCorner[edge];
-    const QPointF surfaceB = source.surfaceCorner[next];
-    result.surfaceCorner[outerA] = rotateAround(source.surfaceCorner[outerA], surfaceB);
-    result.surfaceCorner[outerB] = rotateAround(source.surfaceCorner[outerB], surfaceA);
+    // 1. 子平面的两个消失点：共享边方向 u 与深度方向 v。
+    const Vec3 seamLine = joinLines(imagePoint(seamA), imagePoint(seamB));
+    const Vec3 outerLine = joinLines(imagePoint(source.corner[farA]),
+                                     imagePoint(source.corner[farB]));
+    const Vec3 sideA = joinLines(imagePoint(seamA), imagePoint(source.corner[farA]));
+    const Vec3 sideB = joinLines(imagePoint(seamB), imagePoint(source.corner[farB]));
+    const Vec3 vanishingU = meetLines(seamLine, outerLine);
+    const Vec3 vanishingV = meetLines(sideA, sideB);
+    if (dot(vanishingU, vanishingU) < 1e-12 || dot(vanishingV, vanishingV) < 1e-12)
+        return result;
+
+    const qreal cx = backgroundSize.width() / 2.0;
+    const qreal cy = backgroundSize.height() / 2.0;
+    const qreal imageExtent = qMax(backgroundSize.width(), backgroundSize.height());
+    qreal focalLength = imageExtent * 1.2;
+    QPointF vuImage;
+    QPointF vvImage;
+    if (toImagePoint(vanishingU, &vuImage) && toImagePoint(vanishingV, &vvImage))
+        focalLength = focalFromOrthogonalVanishingPoints(vuImage, vvImage, backgroundSize);
+    const CameraFrame frame{focalLength, cx, cy};
+
+    Vec3 axis = vanishingDirection(vanishingU, frame);
+    Vec3 depthDirection = vanishingDirection(vanishingV, frame);
+    if (!normalize(&axis) || !normalize(&depthDirection))
+        return result;
+    Vec3 normal = cross(axis, depthDirection);
+    if (!normalize(&normal))
+        return result; // 两个消失方向重合，无法定义子平面
+
+    // 2. 把角点反投影到平面 normal·X = h 上。h 只决定整体尺度，而透视投影
+    //    对整体尺度不敏感，所以直接由共享边端点所在的射线确定它。
+    const Vec3 raySeamA = imageRay(seamA, frame);
+    const double h = dot(normal, raySeamA);
+    if (qAbs(h) < 1e-9)
+        return result; // 子平面几乎穿过相机中心
+    auto onPlane = [&](const QPointF &p, Vec3 *out) {
+        const Vec3 ray = imageRay(p, frame);
+        const double denominator = dot(normal, ray);
+        if (qAbs(denominator) < 1e-12)
+            return false;
+        *out = ray * (h / denominator);
+        return true;
+    };
+    Vec3 a;
+    Vec3 b;
+    Vec3 outerA;
+    Vec3 outerB;
+    if (!onPlane(seamA, &a) || !onPlane(seamB, &b) ||
+        !onPlane(source.corner[farA], &outerA) || !onPlane(source.corner[farB], &outerB))
+        return result;
+    // 消失点的齐次符号是任意的。把旋转轴统一成“由 seamA 指向 seamB”，
+    // 夹角增大的方向才不会随四边形绕向而变。翻转 axis 不影响上面的平面，
+    // 因为 h 与 normal 会同时变号，交点位置是它们的比值。
+    if (dot(b - a, axis) < 0.0)
+        axis = axis * -1.0;
+
+    // 3. 绕共享边旋转 Δ。用完整的 Rodrigues 公式，即使子平面被自由拖动成
+    //    一般四边形（深度方向不严格垂直于共享边）也能保持刚体旋转。
+    qreal delta = targetAngle - source.relativeAngle;
+    while (delta > 180.0)
+        delta -= 360.0;
+    while (delta <= -180.0)
+        delta += 360.0;
+    const qreal radians = qDegreesToRadians(delta);
+    const double cosine = qCos(radians);
+    const double sine = qSin(radians);
+    auto rotateAroundSeam = [&](const Vec3 &v) {
+        // 取 v × axis 为正方向，使 relativeAngle 减小时子平面朝远离父平面的
+        // 一侧倒下：于是 0° 恰好是“完全展开、与父平面共面并向外延展”的状态。
+        return v * cosine + cross(v, axis) * sine + axis * (dot(axis, v) * (1.0 - cosine));
+    };
+    const Vec3 movedA = a + rotateAroundSeam(outerA - a);
+    const Vec3 movedB = b + rotateAroundSeam(outerB - b);
+
+    // 4. 重新投影回图像。
+    QPointF projectedA;
+    QPointF projectedB;
+    if (!projectPoint(movedA, frame, &projectedA) || !projectPoint(movedB, frame, &projectedB))
+        return result;
+    result.corner[farA] = projectedA;
+    result.corner[farB] = projectedB;
+
+    // 曲面坐标保持不变：旋转不改变子平面的固有尺寸，纹理应当继续贴合角点。
     result.relativeAngle = std::fmod(targetAngle, 360.0);
     if (qFuzzyIsNull(result.relativeAngle) && targetAngle > 0.0)
         result.relativeAngle = 360.0;

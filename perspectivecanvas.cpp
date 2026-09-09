@@ -117,7 +117,7 @@ void PerspectiveCanvas::setPlaneAngle(qreal angle)
     const int edge = current.parentEdge >= 0 ? 0 : -1;
     if (edge < 0)
         return;
-    const Plane candidate = rotateChildPlane(current, edge, angle);
+    const Plane candidate = rotateChildPlane(current, edge, angle, m_doc.background().size());
     m_doc.beginEdit();
     if (m_doc.setPlane(index, candidate)) {
         m_doc.commitEdit(true);
