@@ -28,6 +28,10 @@ struct Plane : Facet {
     int surfaceGroup = -1;  // 所属的展开曲面分组（共享曲面的相邻平面同组）
     quint8 lockedEdges = 0; // 与相邻垂直平面共用、不可编辑的边（位掩码）
     QString name;           // 显示用的平面名称
+    int parentPlane = -1;   // 由哪个平面拖出；仅子平面可设置夹角
+    int parentEdge = -1;    // 父平面上对应的共享边
+    qreal relativeAngle = 90.0; // 与父平面的夹角（度）
+    bool angleAdjusted = false; // 用户是否手动调整过夹角
 };
 
 // 平面几何与透视构造算法的纯函数集合。
@@ -77,5 +81,7 @@ bool perpendicularDirection(const Plane &source, const QPointF &atPoint,
 Plane makePerpendicularPlane(const Plane &source, int edge,
                              const QPointF &dragPoint, const QPointF &pressPoint,
                              const QSize &backgroundSize);
+// 调整子平面相对共享边的夹角，保持共享边端点不动。
+Plane rotateChildPlane(const Plane &source, int edge, qreal targetAngle);
 
 } // namespace PlaneMath

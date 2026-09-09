@@ -29,6 +29,7 @@ private:
     QSlider *m_hardness = nullptr;         // 笔刷硬度滑块
     QSlider *m_opacity = nullptr;          // 笔刷不透明度滑块
     QSlider *m_gridSize = nullptr;         // 平面网格大小滑块
+    QSlider *m_planeAngle = nullptr;       // 子平面角度滑块（0–360°）
     QLabel *m_colorSwatch = nullptr;       // 当前画笔颜色的色块预览
     QWidget *m_brushTitle = nullptr;       // “笔刷设置”标题（按工具显隐）
     QWidget *m_planeTitle = nullptr;       // “平面设置”标题（按工具和文档显隐）
@@ -36,6 +37,7 @@ private:
     QWidget *m_hardnessRow = nullptr;      // 硬度“标签+数值”行（按工具显隐）
     QWidget *m_opacityRow = nullptr;       // 不透明度“标签+数值”行（按工具显隐）
     QWidget *m_gridSizeRow = nullptr;      // 网格大小“标签+数值”行（创建/编辑工具显示）
+    QWidget *m_planeAngleRow = nullptr;    // 角度“标签+数值”行（创建/编辑工具显示）
     QWidget *m_colorRow = nullptr;         // 颜色选择行（仅画笔工具显示）
     QWidget *m_cloneAligned = nullptr;
 };

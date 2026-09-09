@@ -33,6 +33,8 @@ public:
     bool hasSelectedPlane() const { return m_doc.selectedPlane() >= 0 && m_doc.selectedPlane() < m_doc.planes().size(); }
     bool hasLoadedImage() const { return m_doc.hasLoadedImage(); }
     bool hasSelectedImage() const { return m_doc.selectedImage() >= 0 && m_doc.selectedImage() < m_doc.images().size(); }
+    qreal selectedPlaneAngle() const;
+    bool canSetSelectedPlaneAngle() const;
     QColor brushColor() const { return m_paint.color(); }
 
 public slots:
@@ -41,6 +43,7 @@ public slots:
     void setBrushHardness(int value) { m_paint.setHardness(value); m_cloneTool.setHardness(value); }
     void setBrushOpacity(int value) { m_paint.setOpacity(value); m_cloneTool.setOpacity(value); }
     void setGridSize(int value) { m_gridSize = qMax(1, value); update(); }
+    void setPlaneAngle(qreal angle);
     void setCloneAligned(bool aligned);
     void setBrushColor(const QColor &color) { m_paint.setColor(color); }
     void clearPainting();                  // 清除绘画层上的绘画内容
@@ -55,6 +58,7 @@ signals:
     void canUndoChanged(bool available);                        // 撤销可用性变化
     void canRedoChanged(bool available);                        // 重做可用性变化
     void documentAvailabilityChanged(bool available);           // 文档（背景图像）加载状态变化
+    void planeAngleChanged(qreal angle, bool editable);
 
 protected:
     void paintEvent(QPaintEvent *) override;      // 绘制整个场景

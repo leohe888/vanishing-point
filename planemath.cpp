@@ -1,5 +1,7 @@
 #include "planemath.h"
 
+#include <QtMath>
+
 #include <QImage>
 #include <QLineF>
 #include <QTransform>
@@ -451,6 +453,41 @@ Plane makePerpendicularPlane(const Plane &source, int edge,
     const qreal surfaceDepth = qMax(1.0, canvasDepth * surfaceEdgeLength / canvasEdgeLength);
     result.surfaceCorner[2] = surfaceB + outward * surfaceDepth;
     result.surfaceCorner[3] = surfaceA + outward * surfaceDepth;
+    return result;
+}
+
+Plane rotateChildPlane(const Plane &source, int edge, qreal targetAngle)
+{
+    Plane result = source;
+    if (edge < 0 || edge >= 4 || !qIsFinite(targetAngle))
+        return result;
+    const int next = (edge + 1) % 4;
+    const int outerA = (edge + 2) % 4; // 与共享边 next 端点相连
+    const int outerB = (edge + 3) % 4; // 与共享边 edge 端点相连
+    const QPointF seamA = source.corner[edge];
+    const QPointF seamB = source.corner[next];
+    const qreal delta = targetAngle - source.relativeAngle;
+    auto rotateAround = [delta](const QPointF &p, const QPointF &pivot) {
+        const qreal radians = qDegreesToRadians(delta);
+        const qreal c = qCos(radians), s = qSin(radians);
+        const QPointF v = p - pivot;
+        return pivot + QPointF(c * v.x() - s * v.y(), s * v.x() + c * v.y());
+    };
+    result.corner[outerA] = rotateAround(source.corner[outerA], seamB);
+    result.corner[outerB] = rotateAround(source.corner[outerB], seamA);
+
+    const QPointF surfaceA = source.surfaceCorner[edge];
+    const QPointF surfaceB = source.surfaceCorner[next];
+    result.surfaceCorner[outerA] = rotateAround(source.surfaceCorner[outerA], surfaceB);
+    result.surfaceCorner[outerB] = rotateAround(source.surfaceCorner[outerB], surfaceA);
+    result.relativeAngle = std::fmod(targetAngle, 360.0);
+    if (qFuzzyIsNull(result.relativeAngle) && targetAngle > 0.0)
+        result.relativeAngle = 360.0;
+    else if (result.relativeAngle < 0.0)
+        result.relativeAngle += 360.0;
+    result.angleAdjusted = true;
+    if (!isValidPlane(result))
+        return source;
     return result;
 }
 

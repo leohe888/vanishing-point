@@ -88,6 +88,46 @@ PerspectiveCanvas::PerspectiveCanvas(QWidget *parent) : QWidget(parent)
     });
 }
 
+qreal PerspectiveCanvas::selectedPlaneAngle() const
+{
+    const int index = m_doc.selectedPlane();
+    return (index >= 0 && index < m_doc.planes().size()) ? m_doc.planes()[index].relativeAngle : 90.0;
+}
+
+bool PerspectiveCanvas::canSetSelectedPlaneAngle() const
+{
+    const int index = m_doc.selectedPlane();
+    if (index < 0 || index >= m_doc.planes().size() || m_doc.planes()[index].parentPlane < 0)
+        return false;
+    // 调整任一直接子平面的角度后，当前平面作为父平面的角度被锁定，
+    // 避免改变父平面导致整条共享曲面链重新解释。
+    for (const Plane &child : m_doc.planes()) {
+        if (child.parentPlane == index && child.angleAdjusted)
+            return false;
+    }
+    return true;
+}
+
+void PerspectiveCanvas::setPlaneAngle(qreal angle)
+{
+    if (!canSetSelectedPlaneAngle() || !qIsFinite(angle))
+        return;
+    const int index = m_doc.selectedPlane();
+    const Plane current = m_doc.planes()[index];
+    const int edge = current.parentEdge >= 0 ? 0 : -1;
+    if (edge < 0)
+        return;
+    const Plane candidate = rotateChildPlane(current, edge, angle);
+    m_doc.beginEdit();
+    if (m_doc.setPlane(index, candidate)) {
+        m_doc.commitEdit(true);
+        emit planeAngleChanged(candidate.relativeAngle, true);
+        update();
+    } else {
+        m_doc.cancelEdit();
+    }
+}
+
 // 从文件加载背景图像，并清空交互状态与视图变换
 bool PerspectiveCanvas::loadImage(const QString &fileName)
 {
@@ -865,6 +905,7 @@ void PerspectiveCanvas::finishPlaneCreation()
         m_doc.appendPlane(plane);
         m_doc.setSelectedPlane(m_doc.planes().size() - 1);
         m_doc.commitEdit(true);
+        emit planeAngleChanged(selectedPlaneAngle(), canSetSelectedPlaneAngle());
         emit statusMessage(tr("平面已创建，已自动进入编辑工具。"), 4000);
         emit toolChangeRequested(EditPlane);
     } else {
@@ -1088,7 +1129,11 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             return edge >= 0 && (sharedEdges & quint8(1u << edge))
                    && (handle < 0 || handle == edge || handle == (edge + 1) % 4 || handle == 4 + edge);
         };
-        if (isLocked(m_dragHandle, m_dragEdge) ||
+        const bool requestedRotation = (event->modifiers() & Qt::AltModifier)
+                                       && candidate >= 0
+                                       && m_doc.planes()[candidate].parentPlane >= 0
+                                       && m_dragHandle == 4 + 2;
+        if ((!requestedRotation && isLocked(m_dragHandle, m_dragEdge)) ||
             (m_dragHandle >= 0 && (((sharedEdges >> m_dragHandle) & 1u) ||
                                    (m_dragHandle < 4 && ((sharedEdges >> ((m_dragHandle + 3) % 4)) & 1u))))) {
             m_dragHandle = -1;
@@ -1135,6 +1180,7 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             m_dragEdge = -1;
         }
         m_doc.setSelectedPlane(candidate);
+        emit planeAngleChanged(selectedPlaneAngle(), canSetSelectedPlaneAngle());
         if (candidate >= 0) {
             // Adjacent planes created from a shared edge are locked as a pair:
             // clicking their interior may select them, but cannot translate
@@ -1147,8 +1193,12 @@ void PerspectiveCanvas::mousePressEvent(QMouseEvent *event)
             m_doc.beginEdit();
             m_gesture = Gesture::Plane;
             const bool extruding = (event->modifiers() & Qt::ControlModifier) && m_dragEdge >= 0;
-            m_planeTool.begin(m_doc.planes()[candidate], point, m_dragHandle, m_dragEdge,
-                              extruding, m_doc.background().size());
+            const Plane &selected = m_doc.planes()[candidate];
+            const bool rotating = (event->modifiers() & Qt::AltModifier)
+                                  && selected.parentPlane >= 0 && m_dragHandle == 4 + 2;
+            m_planeTool.begin(selected, point, m_dragHandle, m_dragEdge,
+                              extruding, m_doc.background().size(), rotating,
+                              rotating ? 0 : -1);
             if (extruding)
                 m_hasExtrudePreview = m_planeTool.update(point, &m_extrudePreview);
         }
@@ -1240,6 +1290,8 @@ void PerspectiveCanvas::mouseMoveEvent(QMouseEvent *event)
         } else if (valid) {
             m_doc.setPlane(m_doc.selectedPlane(), candidate);
             m_stateChanged = planePolygon(candidate.corner) != planePolygon(m_planeTool.start().corner);
+            if (m_planeTool.rotating())
+                emit planeAngleChanged(candidate.relativeAngle, true);
         }
         update();
         return;
@@ -1373,6 +1425,8 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
         } else if (valid) {
             m_doc.setPlane(m_doc.selectedPlane(), candidate);
             m_stateChanged = planePolygon(candidate.corner) != planePolygon(m_planeTool.start().corner);
+            if (m_planeTool.rotating())
+                emit planeAngleChanged(candidate.relativeAngle, true);
         }
     }
     if (m_imageTool.transforming() && m_draggingImage >= 0)
@@ -1395,9 +1449,17 @@ void PerspectiveCanvas::mouseReleaseEvent(QMouseEvent *event)
             const int index = m_doc.appendPlane(m_extrudePreview);
             if (index >= 0) {
                 const int sourceIndex = m_doc.selectedPlane();
-                if (sourceIndex >= 0 && sourceIndex != index)
+                if (sourceIndex >= 0 && sourceIndex != index) {
                     m_doc.lockPlaneEdge(sourceIndex, m_planeTool.edge());
+                    Plane child = m_doc.planes()[index];
+                    child.parentPlane = sourceIndex;
+                    child.parentEdge = m_planeTool.edge();
+                    child.relativeAngle = 90.0;
+                    child.angleAdjusted = false;
+                    m_doc.setPlane(index, child);
+                }
                 m_doc.setSelectedPlane(index);
+                emit planeAngleChanged(selectedPlaneAngle(), canSetSelectedPlaneAngle());
                 m_stateChanged = true;
                 emit statusMessage(tr("已创建相邻的垂直平面"), 3000);
             }

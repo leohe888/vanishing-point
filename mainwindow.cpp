@@ -137,6 +137,7 @@ void MainWindow::buildUi()
     m_planeTitle->setObjectName("sectionTitle");
     sideLayout->addWidget(m_planeTitle);
     m_gridSize = addSlider(tr("网格大小"), 10, 200, 50, &m_gridSizeRow);
+    m_planeAngle = addSlider(tr("角度"), 0, 360, 90, &m_planeAngleRow);
     auto *aligned = new QCheckBox(tr("对齐"), side);
     aligned->setChecked(true);
     aligned->setToolTip(tr("勾选：松开鼠标后源点继续跟随；取消：每一笔从最初的源点重新取样"));
@@ -221,6 +222,13 @@ void MainWindow::buildUi()
     connect(m_hardness, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushHardness);
     connect(m_opacity, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setBrushOpacity);
     connect(m_gridSize, &QSlider::valueChanged, m_canvas, &PerspectiveCanvas::setGridSize);
+    connect(m_planeAngle, &QSlider::valueChanged, m_canvas,
+            [this](int angle) { m_canvas->setPlaneAngle(angle); });
+    connect(m_canvas, &PerspectiveCanvas::planeAngleChanged, this,
+            [this](qreal angle, bool editable) {
+                m_planeAngle->setValue(qRound(angle));
+                m_planeAngle->setEnabled(editable);
+            });
     connect(aligned, &QCheckBox::toggled, m_canvas, &PerspectiveCanvas::setCloneAligned);
     connect(colorButton, &QPushButton::clicked, this, &MainWindow::chooseColor);
     connect(openAction, &QAction::triggered, this, [this] {
@@ -278,6 +286,9 @@ void MainWindow::updateToolOptions(int toolId)
     m_cloneAligned->setVisible(isCloneTool);
     m_gridSizeRow->setVisible(showGridSettings);
     m_gridSize->setVisible(showGridSettings);
+    m_planeAngleRow->setVisible(showGridSettings);
+    m_planeAngle->setVisible(showGridSettings);
+    m_planeAngle->setEnabled(m_canvas->canSetSelectedPlaneAngle());
     m_planeTitle->setVisible(showGridSettings);
 }
 

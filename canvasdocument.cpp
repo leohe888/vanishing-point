@@ -137,6 +137,14 @@ void CanvasDocument::removePlane(int index)
     for (int other = 0; other < m_planes.size(); ++other) {
         if (other == index)
             continue;
+        if (m_planes[other].parentPlane == index) {
+            m_planes[other].parentPlane = -1;
+            m_planes[other].parentEdge = -1;
+            m_planes[other].relativeAngle = 90.0;
+            m_planes[other].angleAdjusted = false;
+        } else if (m_planes[other].parentPlane > index) {
+            --m_planes[other].parentPlane;
+        }
         for (int edge = 0; edge < 4; ++edge) {
             const QPointF a = m_planes[other].corner[edge];
             const QPointF b = m_planes[other].corner[(edge + 1) % 4];
