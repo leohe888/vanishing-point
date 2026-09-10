@@ -149,7 +149,7 @@ enum class Gesture { Idle, Plane, Image, Brush, Clone, Selection };
 | 撤销 / 重做 | `canvasdocument.cpp` 的 `HistoryEntry` |
 | 屏幕上的线、控制点怎么画 | `scenerenderer.cpp` |
 | 鼠标由谁响应 | `perspectivecanvas.cpp` 的 `mousePressEvent` |
-| 快捷键、工具栏 | `mainwindow.cpp` |
+| 快捷键、菜单栏 | `mainwindow.cpp` |
 
 `perspectivecanvas.cpp` 有 1400+ 行，**不要从头读**——它是按工具分派的大分支，应该带着"我要找某个功能"的目的去搜方法名。
 

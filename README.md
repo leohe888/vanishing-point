@@ -41,8 +41,8 @@ cmake --build build
 
 | 操作 | 快捷键 |
 | --- | --- |
-| 打开图像 / 导出结果 | `Ctrl+O` / `Ctrl+S`，或工具栏按钮（PNG、JPG） |
-| 粘贴为浮动图像 | `Ctrl+V` |
+| 打开图像 / 导出结果 | `Ctrl+O` / `Ctrl+S`，或“文件”菜单（PNG、JPG） |
+| 粘贴为浮动图像 | `Ctrl+V`，或“编辑”菜单 |
 | 点击别处（有图像选中时） | 把浮动图像合并进绘画层，之后不能再单独操作 |
 | 撤销 / 重做 | `Ctrl+Z` / `Ctrl+Shift+Z` |
 | 删除选中的图像或平面 | `Delete` / `Backspace` |
@@ -84,7 +84,7 @@ VanishingCore（只依赖 Qt Core/Gui，纯逻辑，便于测试）
 
 VanishingWidgets（依赖 Qt Widgets 的界面层）
 ├── perspectivecanvas.*    画布控件：视图变换、输入路由、交互事务协调
-└── mainwindow.*           主窗口：工具栏、参数面板、信号接线
+└── mainwindow.*           主窗口：菜单栏、参数面板、信号接线
 ```
 
 分层的关键约束：`VanishingCore` 不引入任何 Widgets 头；几何、文档、绘画引擎、渲染各自独立，工具只维护自己的拖动状态，由 `PerspectiveCanvas` 负责分派与提交事务。

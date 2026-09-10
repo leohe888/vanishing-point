@@ -12,12 +12,13 @@
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QShortcut>
 #include <QSlider>
 #include <QStatusBar>
-#include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -52,8 +53,27 @@ const ToolSpec kToolSpecs[] = {
 
 const char *const kSwatchStyle = "background:%1; border:1px solid #777; border-radius:3px;";
 
+// 菜单里"功能还没实现"的占位项：禁用并灰显，避免点开一个空菜单。
+QAction *addPlaceholderAction(QMenu *menu)
+{
+    QAction *action = menu->addAction(
+        QCoreApplication::translate("MainWindow", "（暂无可用项）"));
+    action->setEnabled(false);
+    return action;
+}
+
+
 const char *const kStyleSheet = R"(
     QMainWindow { background:#25282c; }
+    QMenuBar { background:#2b2f34; color:#dfe3e8; border-bottom:1px solid #15171a; }
+    QMenuBar::item { background:transparent; padding:5px 12px; border-radius:3px; }
+    QMenuBar::item:selected { background:#3b4047; }
+    QMenuBar::item:disabled { color:#6f757c; }
+    QMenu { background:#2b2f34; color:#dfe3e8; border:1px solid #15171a; padding:4px 0; }
+    QMenu::item { padding:5px 28px; }
+    QMenu::item:selected { color:white; background:#1769aa; }
+    QMenu::item:disabled { color:#6f757c; }
+    QMenu::separator { height:1px; background:#3d434a; margin:4px 1px; }
     QStatusBar { background:#202328; color:#f2f5f7; border-top:1px solid #111315;
                  min-height:25px; padding-left:6px; }
     QStatusBar QLabel { color:#f2f5f7; background:transparent; }
@@ -69,7 +89,6 @@ const char *const kStyleSheet = R"(
     QToolButton:hover { background:#464c54; }
     QToolButton:checked { color:white; background:#1769aa; border-color:#2785d0; }
     QToolButton:disabled { color:#707780; background:#292d32; border-color:#353a40; }
-    QToolBar QToolButton:disabled { color:#737981; background:transparent; border:none; }
     QPushButton { color:#e8eaed; background:#42474e; border:1px solid #555b64;
                   border-radius:3px; padding:4px 8px; }
     QPushButton:disabled { color:#6f757c; background:#2a2e33; border-color:#383d43; }
@@ -100,7 +119,7 @@ void MainWindow::buildUi()
     setWindowTitle(tr("消失点"));
     resize(kWindowWidth, kWindowHeight);
 
-    buildFileToolBar();
+    buildMenuBar();
 
     auto *root = new QWidget(this);
     // 画布先建：侧栏的初始值（如画笔颜色）直接取自画布，避免默认值在两处各写一份。
@@ -120,24 +139,39 @@ void MainWindow::buildUi()
     statusBar()->showMessage(tr("请打开一张图片开始操作"));
 }
 
-void MainWindow::buildFileToolBar()
+void MainWindow::buildMenuBar()
 {
-    auto *bar = addToolBar(tr("文件"));
-    bar->setMovable(false);
+    buildFileActions(menuBar()->addMenu(tr("文件")));
+    buildEditActions(menuBar()->addMenu(tr("编辑")));
 
-    m_openAction = bar->addAction(tr("打开图像"));
-    m_saveAction = bar->addAction(tr("导出结果"));
-    bar->addSeparator();
-    m_undoAction = bar->addAction(tr("撤销"));
-    m_redoAction = bar->addAction(tr("重做"));
+    // 视图与帮助的具体功能尚未实现，先保留菜单入口，后续直接往里加动作即可。
+    m_viewMenu = menuBar()->addMenu(tr("视图"));
+    m_helpMenu = menuBar()->addMenu(tr("帮助"));
+    addPlaceholderAction(m_viewMenu);
+    addPlaceholderAction(m_helpMenu);
+}
 
-    // 没有文档时这些动作都不可用，等 documentAvailabilityChanged / canUndoChanged 再放开。
+void MainWindow::buildFileActions(QMenu *menu)
+{
+    m_openAction = menu->addAction(tr("打开文件"));
+    m_saveAction = menu->addAction(tr("保存"));
+
+    // 没有文档时导出不可用，等 documentAvailabilityChanged 再放开。
     m_saveAction->setEnabled(false);
-    m_undoAction->setEnabled(false);
-    m_redoAction->setEnabled(false);
 
     m_openAction->setShortcut(QKeySequence::Open);
     m_saveAction->setShortcut(QKeySequence::Save);
+}
+
+void MainWindow::buildEditActions(QMenu *menu)
+{
+    m_undoAction = menu->addAction(tr("撤销"));
+    m_redoAction = menu->addAction(tr("重做"));
+
+    // 没有可撤销/重做的步骤时不可用，等 canUndoChanged / canRedoChanged 再放开。
+    m_undoAction->setEnabled(false);
+    m_redoAction->setEnabled(false);
+
     m_undoAction->setShortcuts(QKeySequence::keyBindings(QKeySequence::Undo));
 
     QList<QKeySequence> redoShortcuts = QKeySequence::keyBindings(QKeySequence::Redo);
@@ -145,6 +179,10 @@ void MainWindow::buildFileToolBar()
     if (!redoShortcuts.contains(ctrlShiftZ))
         redoShortcuts.append(ctrlShiftZ);
     m_redoAction->setShortcuts(redoShortcuts);
+
+    menu->addSeparator();
+    m_pasteAction = menu->addAction(tr("粘贴"));
+    m_pasteAction->setShortcut(QKeySequence::Paste);
 }
 
 QFrame *MainWindow::buildSidePanel()
@@ -301,10 +339,7 @@ void MainWindow::connectEditingActions()
 {
     connect(m_undoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::undo);
     connect(m_redoAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::redo);
-
-    auto *pasteShortcut = new QShortcut(QKeySequence::Paste, this);
-    pasteShortcut->setContext(Qt::WindowShortcut);
-    connect(pasteShortcut, &QShortcut::activated, m_canvas, &PerspectiveCanvas::pasteClipboardImage);
+    connect(m_pasteAction, &QAction::triggered, m_canvas, &PerspectiveCanvas::pasteClipboardImage);
 }
 
 void MainWindow::connectToolSelection()

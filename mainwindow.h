@@ -10,6 +10,7 @@ class QCheckBox;
 class QColor;
 class QFrame;
 class QLabel;
+class QMenu;
 class QSlider;
 class QVBoxLayout;
 class QWidget;
@@ -25,7 +26,7 @@ struct SliderRow
     void setEnabled(bool enabled);
 };
 
-// 应用主窗口：负责构建工具栏、侧边工具面板并连接信号槽。
+// 应用主窗口：负责构建菜单栏、侧边工具面板并连接信号槽。
 // 所有几何计算、渲染与交互状态均由 PerspectiveCanvas 管理，这里只做界面组装。
 class MainWindow : public QMainWindow
 {
@@ -37,8 +38,10 @@ public:
 
 private:
     // —— 界面构建（详见 buildUi 中的调用顺序）——
-    void buildUi();                             // 总装：工具栏 + 侧栏 + 画布 + 信号
-    void buildFileToolBar();                    // 文件与编辑动作（打开/导出/撤销/重做）
+    void buildUi();                             // 总装：菜单栏 + 侧栏 + 画布 + 信号
+    void buildMenuBar();                        // 菜单栏：文件 / 编辑 / 视图 / 帮助
+    void buildFileActions(QMenu *menu);         // 打开 / 导出
+    void buildEditActions(QMenu *menu);         // 撤销 / 重做 / 粘贴
     QFrame *buildSidePanel();                   // 左侧工具与参数面板
     void buildToolButtons(QVBoxLayout *panel);  // 工具按钮组，与工具枚举一一对应
     void buildColorRow(QVBoxLayout *panel);     // 画笔颜色色块 + 选择按钮
@@ -51,7 +54,7 @@ private:
     // 所有跨组件（画布 ↔ 窗口）的连接统一收在下面这几个方法里。
     void connectSignals();                      // 依次调用下面各项
     void connectFileActions();                  // 打开 / 导出
-    void connectEditingActions();               // 撤销 / 重做 / 粘贴
+    void connectEditingActions();               // 撤销 / 重做 / 粘贴剪贴板
     void connectToolSelection();                // 工具按钮与工具快捷键
     void connectBrushParameters();              // 笔刷与图章参数
     void connectPlaneParameters();              // 平面网格与夹角
@@ -72,6 +75,10 @@ private:
     QAction *m_saveAction = nullptr;
     QAction *m_undoAction = nullptr;
     QAction *m_redoAction = nullptr;
+    QAction *m_pasteAction = nullptr;           // 把剪贴板图像粘贴为浮动图像
+
+    QMenu *m_viewMenu = nullptr;                // 视图菜单：功能待实现，目前只有占位项
+    QMenu *m_helpMenu = nullptr;                // 帮助菜单：同上
 
     QButtonGroup *m_tools = nullptr;            // 工具按钮组，button id 即工具枚举值
 
